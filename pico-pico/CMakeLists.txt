@@ -7,6 +7,19 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
-add_executable(pico-pico main.c)
-target_link_libraries(pico-pico pico_stdlib)
-pico_add_extra_outputs(pico-pico)
+add_executable(master main.c functions.c)
+target_include_directories(master PRIVATE .)
+target_link_libraries(master pico_stdlib hardware_spi)
+pico_enable_stdio_usb(master 1)
+pico_enable_stdio_uart(master 0)
+pico_add_extra_outputs(master)
+
+add_executable(slave slave.c functions.c)
+target_include_directories(slave PRIVATE .)
+target_link_libraries(slave pico_stdlib hardware_spi)
+pico_enable_stdio_usb(slave 1)
+pico_enable_stdio_uart(slave 0)
+pico_add_extra_outputs(slave)
+
+
+
