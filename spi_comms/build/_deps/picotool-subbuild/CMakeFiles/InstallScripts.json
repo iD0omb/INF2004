@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/Daedalus/github/INF2004/spi_comms/build/_deps/picotool-subbuild/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
