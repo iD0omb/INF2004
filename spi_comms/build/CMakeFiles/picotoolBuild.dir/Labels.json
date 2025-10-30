@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/CMakeFiles/picotoolBuild"
+		},
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/CMakeFiles/picotoolBuild.rule"
+		},
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/CMakeFiles/picotoolBuild-complete.rule"
+		},
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/picotool/src/picotoolBuild-stamp/picotoolBuild-build.rule"
+		},
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/picotool/src/picotoolBuild-stamp/picotoolBuild-configure.rule"
+		},
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/picotool/src/picotoolBuild-stamp/picotoolBuild-download.rule"
+		},
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/picotool/src/picotoolBuild-stamp/picotoolBuild-install.rule"
+		},
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/picotool/src/picotoolBuild-stamp/picotoolBuild-mkdir.rule"
+		},
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/picotool/src/picotoolBuild-stamp/picotoolBuild-patch.rule"
+		},
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/picotool/src/picotoolBuild-stamp/picotoolBuild-test.rule"
+		},
+		{
+			"file" : "/home/Daedalus/github/INF2004/spi_comms/build/picotool/src/picotoolBuild-stamp/picotoolBuild-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"picotoolBuild"
+		],
+		"name" : "picotoolBuild"
+	}
+}
