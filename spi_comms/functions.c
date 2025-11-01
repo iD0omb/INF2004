@@ -17,50 +17,52 @@ const opcode safeOps[] = {
         .rx_data_len = 3,
         .description = "Read ManufacturerID, Memory Type and Capacity",
     },
-    ////Read JEDEC ID ALT-1
-    //{
-    //.opcode = 0x9E;
-    //.tx_len = 4
-    //.rx_data_len = 3
-    //.description =
-    //},
-    ////Legacy Read Manufacturer/DeviceID
-    // {
-    //     .opcode = 0x90,
-    //     .tx_len = 6,
-    //     .rx_data_len = 2,
-    //     .description = "Legacy Read Manu/DevID",
-    // },
-    ////Read Unique ID
-    //{
-    //.opcode = 0x4B;
-    //.tx_len = 13
-    //.rx_data_len = 8
-    //.description =
-    //},
-    ////Read Register-1
-    //{
-    //.opcode = 0x05;
-    //.tx_len = 2
-    //.rx_data_len = 1
-    //.description =
-    //},
-    ////Read Register-2
-    //{
-    //.opcode = 0x35;
-    //.tx_len = 2
-    //.rx_data_len = 1
-    //.description =
-    //},
-    ////Read Register-3
-    //{
-    //.opcode = 0x15;
-    //.tx_len = 2
-    //.rx_data_len = 1
-    //.description =
-    //},
-    //
-};
+    // Read JEDEC ID ALT-1
+    {
+        .opcode = 0x9E,
+        .tx_len = 4,
+        .rx_data_len = 3,
+        .description =
+            "Alternate Read ManufacturerID, Memory Type and Capacity",
+    },
+    // Legacy Read Manufacturer/DeviceID
+    {
+        .opcode = 0x90,
+        .tx_len = 6,
+        .rx_data_len = 2,
+        .description = "Legacy Read Manu/DevID",
+    },
+    // Read Unique ID
+    {
+        .opcode = 0x4B,
+        .tx_len = 13,
+        .rx_data_len = 8,
+        .description = "Reads Unique 64-bit Device ID",
+    },
+    // Read Register-1
+    {
+        .opcode = 0x05,
+        .tx_len = 2,
+        .rx_data_len = 1,
+        .description = "Read Status Register - 1",
+    },
+    // Read Register-2
+    {
+        .opcode = 0x35,
+        .tx_len = 2,
+        .rx_data_len = 1,
+        .description = "Read Status Register - 2",
+    },
+    // Read Register-3
+    {
+        .opcode = 0x15,
+        .tx_len = 2,
+        .rx_data_len = 1,
+        .description = "Read Status Register - 3",
+    }};
+
+// Calculate number of commands (PRIVATE)
+static const size_t num_safe_commands = sizeof(safeOps) / sizeof(safeOps[0]);
 
 // Initialize Master SPI Communications
 void spi_master_init(void) {
@@ -188,6 +190,17 @@ int spi_OPSAFE_transfer(spi_inst_t *spi, uint8_t *master_rx_buffer,
 
   // Return the number of bytes written to the report
   return current_rx_offset;
+}
+
+// Gets the total number of commands in the safeOps Mapping
+size_t get_safe_command_count(void) { return num_safe_commands; }
+
+// Gets a pointer to a command struct from the map by the index
+const opcode *get_command_by_index(size_t index) {
+  if (index >= num_safe_commands) {
+    return NULL;
+  }
+  return &safeOps[index]; // Return a pointer to the item
 }
 
 // Format Output to JSON

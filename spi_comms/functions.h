@@ -38,8 +38,14 @@ int spi_ONE_transfer(spi_inst_t *spi, opcode Opcode, uint8_t *tx_buffer,
 int spi_transfer_block(spi_inst_t *spi, const uint8_t *tx_buffer,
                        uint8_t *rx_buffer, size_t len);
 
-// Get expected Report Size
-size_t get_expected_report_size();
+// Getter for expected Report Size
+size_t get_expected_report_size(void);
+
+// Getter for total number of commands in safeOps maps
+size_t get_safe_command_count(void);
+
+// Getter for pointer to a command struct from the map by index
+const opcode *get_command_by_index(size_t index);
 
 // JSON Formatting Function
 #endif
