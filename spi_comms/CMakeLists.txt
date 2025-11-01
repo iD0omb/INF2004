@@ -9,7 +9,7 @@ pico_sdk_init()
 
 add_executable(spi_comms main.c functions.c)
 target_include_directories(spi_comms PRIVATE .)
-target_link_libraries(spi_comms pico_stdlib hardware_spi hardware_gpio pico_stdio pico_time)
+target_link_libraries(spi_comms pico_cyw43_arch pico_stdlib hardware_spi hardware_gpio pico_stdio pico_time)
 pico_enable_stdio_usb(spi_comms 1)
 pico_enable_stdio_uart(spi_comms 0)
 pico_add_extra_outputs(spi_comms)

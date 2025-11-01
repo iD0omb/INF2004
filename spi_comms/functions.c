@@ -8,7 +8,7 @@
 #include <string.h>
 
 // SAFE OPCODE MAPPING
-static const opcode safeOps[] = {
+const opcode safeOps[] = {
 
     // Read JEDEC ID
     {
@@ -25,12 +25,12 @@ static const opcode safeOps[] = {
     //.description =
     //},
     ////Legacy Read Manufacturer/DeviceID
-    //{
-    //.opcode = 0x90;
-    //.tx_len = 6
-    //.rx_data_len = 2
-    //.description =
-    //},
+    // {
+    //     .opcode = 0x90,
+    //     .tx_len = 6,
+    //     .rx_data_len = 2,
+    //     .description = "Legacy Read Manu/DevID",
+    // },
     ////Read Unique ID
     //{
     //.opcode = 0x4B;
@@ -87,7 +87,7 @@ void spi_master_init(void) {
   gpio_set_dir(CS_PIN, GPIO_OUT);
   gpio_put(CS_PIN, 1);
 
-  printf("--- SPI MASTER CONFIGURATION COMPLETE ---");
+  printf("--- SPI MASTER CONFIGURATION COMPLETE ---\n");
 }
 
 // Calculates total expected useful payload size from SafeOPS

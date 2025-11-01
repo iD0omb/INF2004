@@ -20,6 +20,9 @@ typedef struct {
   const char *description;
 } opcode;
 
+// Global struct array
+extern const opcode safeOps[];
+
 // Initalizes SPI
 void spi_master_init(void);
 
