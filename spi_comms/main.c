@@ -50,7 +50,7 @@ void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
       continue;
 
     // Print the section header from the command's description
-    char section_title[40];
+    char section_title[60];
     snprintf(section_title, sizeof(section_title), "%s [Opcode: 0x%02X]",
              cmd->description, cmd->opcode);
     print_section(section_title);
@@ -154,8 +154,8 @@ void print_main_menu() {
   printf("\n");
   printf("╔════════════════════════════════════════╗\n");
   printf("║                                        ║\n");
-  printf("║      Generic SPI Flash Identifier      ║\n");
-  printf("║                v1.0                    ║\n");
+  printf("║           SPI Flash Identifier         ║\n");
+  printf("║                 v1.0                   ║\n");
   printf("║                                        ║\n");
   printf("╚════════════════════════════════════════╝\n");
   printf("\n");
