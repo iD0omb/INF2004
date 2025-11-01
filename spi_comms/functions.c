@@ -41,7 +41,7 @@ const opcode safeOps[] = {
     // Legacy Read Manufacturer/DeviceID
     {
         .opcode = 0x90,
-        .tx_len = 4,
+        .tx_len = 6,
         .rx_data_len = 2,
         .description = "Legacy Read Mfr/Device ID",
     },
@@ -58,6 +58,20 @@ const opcode safeOps[] = {
         .tx_len = 13,
         .rx_data_len = 8,
         .description = "Read Unique ID (64-bit)",
+    },
+    // Read SFDP Headers
+    {
+        .opcode = 0x5A,
+        .tx_len = 13,
+        .rx_data_len = 8,
+        .description = "Read SFDP Table Headers",
+    },
+    // Read SFDP Parameter Headers (After SFDP Headers)
+    {
+        .opcode = 0x5A,
+        .tx_len = 29, // address + dummie + 24 data bytes
+        .rx_data_len = 24,
+        .description = "SFDP Parameter Headers",
     }};
 
 // Calculate number of commands (PRIVATE)
@@ -66,7 +80,7 @@ static const size_t num_safe_commands = sizeof(safeOps) / sizeof(safeOps[0]);
 // Initialize Master SPI Communications
 void spi_master_init(void) {
   // Initialize Serial output/standard C I/O
-  stdio_init_all();
+
   sleep_ms(2000);
 
   printf("--- SPI MASTER INITIALIZING ---\n");
@@ -136,7 +150,6 @@ int spi_ONE_transfer(spi_inst_t *spi, opcode Opcode, uint8_t *tx_buffer,
 // Transfer full SAFE Array block and write responses to the RX buffer
 int spi_OPSAFE_transfer(spi_inst_t *spi, uint8_t *master_rx_buffer,
                         size_t max_report_len) {
-
   // --- Fill master rx with 0x00s first  ---
   memset(master_rx_buffer, 0x00, max_report_len);
 
@@ -171,6 +184,15 @@ int spi_OPSAFE_transfer(spi_inst_t *spi, uint8_t *master_rx_buffer,
     // Assemble the TX buffer (Opcode + Dummies)
     local_tx_buffer[0] = command->opcode;
     memset(&local_tx_buffer[1], 0x00, command->tx_len - 1); // Fill dummies
+
+    // SFDP Header assembly
+    if (command->opcode == 0x5A && command->rx_data_len == 24) {
+      // Address bytes
+      local_tx_buffer[1] = 0x08;
+      local_tx_buffer[2] = 0x00;
+      local_tx_buffer[3] = 0x00;
+      // Dummies already set from memset above
+    }
 
     // Call the low-level helper to do the transfer
     spi_transfer_block(spi, local_tx_buffer, local_rx_buffer, command->tx_len);
@@ -371,4 +393,55 @@ void decode_jedec_id(uint8_t mfr_id, uint8_t mem_type, uint8_t capacity) {
   }
 
   printf("========================\n");
+}
+
+// Decode the SFDP Table
+void decode_sfdp_header(const uint8_t *sfdp) {
+  print_section("SFDP Header");
+
+  bool valid =
+      (sfdp[0] == 'S' && sfdp[1] == 'F' && sfdp[2] == 'D' && sfdp[3] == 'P');
+
+  printf("│ Signature       : ");
+  if (valid)
+    printf("SFDP Success!\n");
+  else {
+    printf("SFDP Invalid!\n");
+    print_separator();
+    return;
+  }
+
+  uint8_t rev_minor = sfdp[4];
+  uint8_t rev_major = sfdp[5];
+  uint8_t hdr_count = sfdp[6] + 1; // per JEDEC: value+1 parameter headers
+  uint8_t access_protocol = sfdp[7];
+
+  printf("│ Revision            : %u.%u\n", rev_major, rev_minor);
+  printf("│ Parameter Headers   : %u\n", hdr_count);
+  printf("│ Access Protocol     : 0x%02X\n", access_protocol);
+
+  print_separator();
+}
+
+// Decode SFDP Params Headers
+void decode_sfdp_param_headers(const uint8_t *buf) {
+  print_section("SFDP Parameter Headers");
+
+  for (int i = 0; i < 3; i++) {
+    const uint8_t *e = &buf[i * 8];
+
+    uint16_t id = e[0] | (e[1] << 0);
+    uint8_t rev = e[2];
+    uint8_t len_dw = e[3];
+    uint8_t ptr = (e[4] | (e[5] << 8) | (e[6] << 16));
+
+    printf("│ Table %d\n", i + 1);
+    printf("│   ID     : 0x%04X\n", id);
+    printf("│   Rev    : 0x%02X\n", rev);
+    printf("│   Length : %u DWORDs (%u bytes)\n", len_dw, len_dw * 4);
+    printf("│   Ptr    : 0x%06lX\n", (unsigned long)ptr);
+    printf("│\n");
+  }
+
+  print_separator();
 }

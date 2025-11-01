@@ -50,4 +50,12 @@ const opcode *get_command_by_index(size_t index);
 // Decode JEDEC ID to identify chip
 void decode_jedec_id(uint8_t mfr_id, uint8_t mem_type, uint8_t capacity);
 
+// Decode SFDP Table
+void decode_sfdp_header(const uint8_t *sfdp);
+void decode_sfdp_param_headers(const uint8_t *buf);
+
+// UI functions
+void print_section(const char *section_name);
+void print_separator(void);
+char get_menu_choice(void);
 #endif

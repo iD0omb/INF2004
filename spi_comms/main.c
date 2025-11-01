@@ -51,7 +51,7 @@ void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
 
     // Print the section header from the command's description
     char section_title[60];
-    snprintf(section_title, sizeof(section_title), "%s [Opcode: 0x%02X]",
+    snprintf(section_title, sizeof(section_title), "%.60s [Opcode: 0x%02X]",
              cmd->description, cmd->opcode);
     print_section(section_title);
 
@@ -60,6 +60,10 @@ void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
       if (offset + cmd->rx_data_len <= len) {
         decode_jedec_id(buf[offset], buf[offset + 1], buf[offset + 2]);
       }
+    } else if (cmd->opcode == 0x5A && cmd->rx_data_len == 8) {
+      decode_sfdp_header(&buf[offset]);
+    } else if (cmd->opcode == 0x5A && cmd->rx_data_len == 24) {
+      decode_sfdp_param_headers(&buf[offset]);
     } else {
       // For all other commands, just print the raw hex data
       printf("│ Data: ");
@@ -69,6 +73,25 @@ void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
         }
       }
       printf("\n");
+    }
+
+    // Pause every 3 sections to avoid terminal overflow
+    if (i > 0 && (i % 3) == 2) {
+      printf("\nPress any key to continue...");
+      get_menu_choice();
+      clear_screen();
+
+      // Page numbering support
+      size_t sections_per_page = 3;
+      size_t current_page = (i / sections_per_page) + 1;
+      size_t total_pages =
+          (num_commands + sections_per_page - 1) / sections_per_page;
+
+      char page_title[50];
+      snprintf(page_title, sizeof(page_title),
+               "FULL CHIP REPORT (Page %zu / %zu)", current_page, total_pages);
+
+      print_header(page_title);
     }
 
     // Advance the offset by this command's payload size
