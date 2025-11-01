@@ -9,25 +9,161 @@
 
 // --- Helper Functions for main.c ---
 
-// Helper to print a buffer
-void print_report_buffer(const uint8_t *buf, size_t len) {
-  printf("--- Report Data (size: %zu) ---\n", len);
-  for (size_t i = 0; i < len; ++i) {
-    // Print 8 bytes per line
-    printf("0x%02X ", buf[i]);
-    if ((i + 1) % 8 == 0) {
-      printf("\n");
-    }
-  }
-  printf("\n---------------------------------\n");
+// Clear the terminal screen
+void clear_screen() {
+  // ANSI escape code to clear screen and move cursor to home
+  printf("\033[2J\033[H");
 }
 
-// Helper to get user input from serial
+// Print a decorative header
+void print_header(const char *title) {
+  printf("\n");
+  printf("╔════════════════════════════════════════╗\n");
+  printf("║ %-38s ║\n", title); // Centered title
+  printf("╚════════════════════════════════════════╝\n");
+}
+
+// Print a separator line
+void print_separator() {
+  printf("──────────────────────────────────────────\n");
+}
+
+// Print a section header
+void print_section(const char *section_name) {
+  printf("\n┌─ %s\n", section_name);
+}
+
+// --- REWRITTEN DYNAMIC REPORT FUNCTION ---
+// This function is now generic and builds the report
+// by reading the safeOps map, just like you wanted.
+void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
+  clear_screen();
+  print_header("FULL CHIP REPORT");
+
+  size_t offset = 0;
+  size_t num_commands = get_safe_command_count();
+
+  // Loop through the command map and print a section for each
+  for (size_t i = 0; i < num_commands; i++) {
+    const opcode *cmd = get_command_by_index(i);
+    if (cmd == NULL)
+      continue;
+
+    // Print the section header from the command's description
+    char section_title[40];
+    snprintf(section_title, sizeof(section_title), "%s [Opcode: 0x%02X]",
+             cmd->description, cmd->opcode);
+    print_section(section_title);
+
+    // If this is the JEDEC ID, decode it specially
+    if (cmd->opcode == 0x9F) {
+      if (offset + cmd->rx_data_len <= len) {
+        decode_jedec_id(buf[offset], buf[offset + 1], buf[offset + 2]);
+      }
+    } else {
+      // For all other commands, just print the raw hex data
+      printf("│ Data: ");
+      for (size_t j = 0; j < cmd->rx_data_len; j++) {
+        if (offset + j < len) {
+          printf("0x%02X ", buf[offset + j]);
+        }
+      }
+      printf("\n");
+    }
+
+    // Advance the offset by this command's payload size
+    offset += cmd->rx_data_len;
+  }
+
+  print_separator();
+  printf("Total useful bytes read: %zu bytes\n", offset);
+  print_separator();
+}
+
+// Helper to print individual command results (cleaned up)
+void print_individual_command(const char *name, uint8_t opcode,
+                              const uint8_t *rx_buffer, size_t total_len,
+                              size_t data_start, size_t data_len) {
+  clear_screen();
+  print_header(name);
+
+  printf("\nOpcode: 0x%02X | Total Length: %zu bytes\n", opcode, total_len);
+  print_separator();
+
+  printf("\n┌─ Raw Response (Full %zu bytes)\n", total_len);
+  for (size_t i = 0; i < total_len; i++) {
+    if (i % 8 == 0)
+      printf("│ ");
+    printf("0x%02X ", rx_buffer[i]);
+    if ((i + 1) % 8 == 0)
+      printf("\n");
+  }
+  if (total_len % 8 != 0)
+    printf("\n");
+
+  print_section("Data Breakdown");
+  printf("│ Junk (Protocol) : ");
+  for (size_t i = 0; i < data_start; i++) {
+    printf("0x%02X ", rx_buffer[i]);
+  }
+  printf("\n");
+
+  printf("│ Payload Data    : ");
+  bool all_zero = true;
+  bool all_ff = true;
+
+  for (size_t i = data_start; i < data_start + data_len; i++) {
+    printf("0x%02X ", rx_buffer[i]);
+    if (rx_buffer[i] != 0x00)
+      all_zero = false;
+    if (rx_buffer[i] != 0xFF)
+      all_ff = false;
+  }
+  printf("\n");
+
+  // Assessment
+  print_section("Assessment");
+  printf("│ ");
+  if (all_ff) {
+    printf("ERROR - All 0xFF (no device response)\n");
+  } else if (all_zero && data_len > 1) {
+    printf("WARNING - All zeros (stuck low or unprogrammed)\n");
+  } else if (opcode == 0x9F && rx_buffer[data_start] != 0xFF) {
+    printf("VALID - JEDEC ID response received\n");
+  } else {
+    printf("VALID - Response received\n");
+  }
+
+  print_separator();
+}
+
+// Helper to get user input from serial (blocking)
 char get_menu_choice() {
-  printf("Enter your choice: ");
-  char c = getchar_timeout_us(10000000); // 10 second timeout
-  printf("%c\n", c);
+  char c;
+  do {
+    c = getchar();
+  } while (c == PICO_ERROR_TIMEOUT || c == '\n' || c == '\r');
+
+  printf("%c\n", c); // Echo the choice
   return c;
+}
+
+// Print the main menu (cleaned up)
+void print_main_menu() {
+  clear_screen();
+  printf("\n");
+  printf("╔════════════════════════════════════════╗\n");
+  printf("║                                        ║\n");
+  printf("║      Generic SPI Flash Identifier      ║\n");
+  printf("║                v1.0                    ║\n");
+  printf("║                                        ║\n");
+  printf("╚════════════════════════════════════════╝\n");
+  printf("\n");
+  printf("  [1] Identify Chip (Quick JEDEC ID)\n");
+  printf("  [2] Full Safe Read Report\n");
+  printf("  [3] Individual Safe Commands\n");
+  printf("\n");
+  printf("──────────────────────────────────────────\n");
 }
 
 // --- Main Application ---
@@ -39,106 +175,153 @@ int main() {
 
   // Initialize the SPI peripheral *only once* at the start.
   spi_master_init();
-  printf("SPI Master Initialized.\n");
+  printf("\nSPI Master Ready.\n");
 
-  // --- Infinite Menu Loop ---
+  // --- Infinite Loop ---
   for (;;) {
-    // Print the main menu
-    printf("\n\n");
-    printf("*****************************************\n");
-    printf("* SPI Flash Tool v1.0 (Pico)       *\n");
-    printf("*****************************************\n");
-    printf("Select Your mode:\n");
-    printf("  [1] Full Safe Read Report\n");
-    printf("  [2] Individual Safe Commands\n");
-    printf("  [3] (Unsafe Commands - Not Implemented)\n");
-    printf("*****************************************\n");
-
+    print_main_menu();
+    printf("Enter your choice: ");
     char choice = get_menu_choice();
 
     switch (choice) {
-    // --- [1] Full Safe Read Report ---
+
+    // --- [1] Identify Chip ---
     case '1': {
-      printf("\n--- Mode 1: Full Safe Read Report ---\n");
+      clear_screen();
+      print_header("CHIP IDENTIFICATION");
+      printf("\nReading JEDEC ID (0x9F)...\n");
+      print_separator();
 
-      // 1. Calculate the required report size
-      size_t report_size = get_expected_report_size();
-      printf("Calculated report size: %zu bytes\n", report_size);
+      // Find the JEDEC ID command in the map (assumes it's index 0)
+      const opcode *jedec_cmd = get_command_by_index(0);
 
-      // 2. Create the master buffer
-      uint8_t master_rx_buffer[report_size];
-
-      // 3. Call your "SAFEBLOCK" function
-      int bytes_stored =
-          spi_OPSAFE_transfer(SPI_PORT, master_rx_buffer, report_size);
-
-      // 4. Print the clean, final report
-      if (bytes_stored > 0) {
-        print_report_buffer(master_rx_buffer, bytes_stored);
-      } else {
-        printf("--- Safe Block FAILED ---\n");
-      }
-      break;
-    }
-
-    // --- [2] Individual Safe Commands ---
-    case '2': {
-      printf("\n--- Mode 2: Individual Safe Commands ---\n");
-
-      // 1. Build your dynamic menu
-      size_t count = get_safe_command_count();
-      printf("Please select a command:\n");
-      for (size_t i = 0; i < count; i++) {
-        const opcode *cmd = get_command_by_index(i);
-        if (cmd != NULL) {
-          printf("  [%zu]: %s (Opcode: 0x%02X)\n", i, cmd->description,
-                 cmd->opcode);
-        }
-      }
-
-      // 2. User selects an index
-      char idx_choice = get_menu_choice();
-      size_t user_choice = idx_choice - '0'; // Convert char '0' to int 0
-
-      // 3. Get the *full struct* for that command
-      const opcode *chosen_command = get_command_by_index(user_choice);
-
-      if (chosen_command == NULL) {
-        printf("Error: Invalid selection.\n");
+      if (jedec_cmd == NULL || jedec_cmd->opcode != 0x9F) {
+        printf("\nError: JEDEC ID command not found in map.\n");
         break;
       }
 
-      printf("Running: %s\n", chosen_command->description);
+      uint8_t tx_buffer[jedec_cmd->tx_len];
+      uint8_t rx_buffer[jedec_cmd->tx_len];
 
-      // 4. Get the size from the struct
+      int result = spi_ONE_transfer(SPI_PORT, *jedec_cmd, tx_buffer, rx_buffer);
+
+      if (result > 0) {
+        // Data starts after the junk
+        size_t data_start = jedec_cmd->tx_len - jedec_cmd->rx_data_len;
+        uint8_t mfr_id = rx_buffer[data_start];
+        uint8_t mem_type = rx_buffer[data_start + 1];
+        uint8_t capacity = rx_buffer[data_start + 2];
+
+        // Call the new helper function to print the decoded ID
+        decode_jedec_id(mfr_id, mem_type, capacity);
+      } else {
+        printf("\nFailed to read JEDEC ID.\n");
+      }
+
+      print_separator();
+      printf("\nPress any key to return to menu...");
+      get_menu_choice();
+      break;
+    }
+
+    // --- [2] Full Safe Read Report (Formatted) ---
+    case '2': {
+      clear_screen();
+      print_header("EXECUTING SAFE READ SEQUENCE");
+
+      size_t report_size = get_expected_report_size();
+      printf("\nReport size: %zu bytes\n", report_size);
+      printf("Executing %zu safe commands...\n", get_safe_command_count());
+      print_separator();
+
+      // Check if report size is 0
+      if (report_size == 0) {
+        printf("Error: No commands defined in map.\n");
+        printf("\nPress any key to return to menu...");
+        get_menu_choice();
+        break;
+      }
+
+      uint8_t master_rx_buffer[report_size];
+
+      int bytes_stored =
+          spi_OPSAFE_transfer(SPI_PORT, master_rx_buffer, report_size);
+
+      if (bytes_stored > 0) {
+        printf("\nRead complete! Analyzing data...\n");
+        sleep_ms(500); // Brief pause for effect
+        // Call the new DYNAMIC report printer
+        print_report_buffer_formatted(master_rx_buffer, bytes_stored);
+      } else {
+        printf("\nSafe Block Transfer FAILED\n");
+        print_separator();
+      }
+
+      printf("\nPress any key to return to menu...");
+      get_menu_choice();
+      break;
+    }
+
+    // --- [3] Individual Safe Commands ---
+    case '3': {
+      clear_screen();
+      print_header("INDIVIDUAL COMMAND SELECTION");
+
+      size_t count = get_safe_command_count();
+      printf("\n%zu commands available:\n\n", count);
+
+      for (size_t i = 0; i < count; i++) {
+        const opcode *cmd = get_command_by_index(i);
+        if (cmd != NULL) {
+          printf("  [%zu] %s\n       Opcode: 0x%02X | Total-TX: %zu | Data-RX: "
+                 "%zu\n\n",
+                 i, cmd->description, cmd->opcode, cmd->tx_len,
+                 cmd->rx_data_len);
+        }
+      }
+
+      print_separator();
+      printf("Enter choice [0-%zu]: ", count - 1);
+      char idx_choice = get_menu_choice();
+      size_t user_choice = idx_choice - '0'; // Convert char '0' to int 0
+
+      const opcode *chosen_command = get_command_by_index(user_choice);
+
+      if (chosen_command == NULL) {
+        printf("\nInvalid selection.\n");
+        printf("\nPress any key to return to menu...");
+        get_menu_choice();
+        break;
+      }
+
+      printf("\nExecuting command...\n");
+      sleep_ms(300);
+
       size_t required_len = chosen_command->tx_len;
-
-      // 5. Create buffers of the correct size
       uint8_t my_tx_buffer[required_len];
       uint8_t my_rx_buffer[required_len];
 
-      // 6. Call your new function
       spi_ONE_transfer(SPI_PORT, *chosen_command, my_tx_buffer, my_rx_buffer);
 
-      // 7. Parse the results
-      printf("Raw response in my_rx_buffer:\n");
-      for (size_t i = 0; i < required_len; i++) {
-        printf("  [%zu]: 0x%02X\n", i, my_rx_buffer[i]);
+      // Calculate where data starts
+      size_t data_start = chosen_command->tx_len - chosen_command->rx_data_len;
+
+      print_individual_command(
+          chosen_command->description, chosen_command->opcode, my_rx_buffer,
+          required_len, data_start, chosen_command->rx_data_len);
+
+      printf("\nPress any key to return to menu...");
+      get_menu_choice();
+      break;
+    }
+
+    default:
+      if (choice != '\n' && choice != '\r' && choice != PICO_ERROR_TIMEOUT) {
+        printf("\nInvalid choice. Please try again.\n");
+        sleep_ms(1000);
       }
       break;
     }
-
-    // --- [3] Unsafe Commands ---
-    case '3':
-      printf("\n--- Mode 3: Not Implemented ---\n");
-      break;
-
-    default:
-      printf("\nInvalid choice. Please try again.\n");
-      break;
-    }
-
-    sleep_ms(1000); // Wait before re-drawing menu
   }
 
   return 0; // Unreachable

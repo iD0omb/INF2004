@@ -47,5 +47,7 @@ size_t get_safe_command_count(void);
 // Getter for pointer to a command struct from the map by index
 const opcode *get_command_by_index(size_t index);
 
-// JSON Formatting Function
+// Decode JEDEC ID to identify chip
+void decode_jedec_id(uint8_t mfr_id, uint8_t mem_type, uint8_t capacity);
+
 #endif

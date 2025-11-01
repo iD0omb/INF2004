@@ -7,58 +7,57 @@
 #include <stdio.h>
 #include <string.h>
 
-// SAFE OPCODE MAPPING
+// SAFE OPCODE MAPPING - Generic commands that work across most SPI flash chips
 const opcode safeOps[] = {
 
-    // Read JEDEC ID
+    // Read JEDEC ID (Standard across all manufacturers)
     {
         .opcode = 0x9F,
         .tx_len = 4,
         .rx_data_len = 3,
-        .description = "Read ManufacturerID, Memory Type and Capacity",
+        .description = "Read JEDEC ID (Mfr/Type/Capacity)",
     },
-    // Read JEDEC ID ALT-1
-    {
-        .opcode = 0x9E,
-        .tx_len = 4,
-        .rx_data_len = 3,
-        .description =
-            "Alternate Read ManufacturerID, Memory Type and Capacity",
-    },
-    // Legacy Read Manufacturer/DeviceID
-    {
-        .opcode = 0x90,
-        .tx_len = 6,
-        .rx_data_len = 2,
-        .description = "Legacy Read Manu/DevID",
-    },
-    // Read Unique ID
-    {
-        .opcode = 0x4B,
-        .tx_len = 13,
-        .rx_data_len = 8,
-        .description = "Reads Unique 64-bit Device ID",
-    },
-    // Read Register-1
+    // Read Status Register-1 (Standard)
     {
         .opcode = 0x05,
         .tx_len = 2,
         .rx_data_len = 1,
-        .description = "Read Status Register - 1",
+        .description = "Read Status Register-1",
     },
-    // Read Register-2
+    // Read Status Register-2 (Common but not universal)
     {
         .opcode = 0x35,
         .tx_len = 2,
         .rx_data_len = 1,
-        .description = "Read Status Register - 2",
+        .description = "Read Status Register-2",
     },
-    // Read Register-3
+    // Read Status Register-3 (Common but not universal)
     {
         .opcode = 0x15,
         .tx_len = 2,
         .rx_data_len = 1,
-        .description = "Read Status Register - 3",
+        .description = "Read Status Register-3",
+    },
+    // Legacy Read Manufacturer/DeviceID
+    {
+        .opcode = 0x90,
+        .tx_len = 4,
+        .rx_data_len = 2,
+        .description = "Legacy Read Mfr/Device ID",
+    },
+    // Read Electronic Signature (Alternative ID method)
+    {
+        .opcode = 0xAB,
+        .tx_len = 5,
+        .rx_data_len = 1,
+        .description = "Read Electronic Signature",
+    },
+    // Read Unique ID (If supported)
+    {
+        .opcode = 0x4B,
+        .tx_len = 13,
+        .rx_data_len = 8,
+        .description = "Read Unique ID (64-bit)",
     }};
 
 // Calculate number of commands (PRIVATE)
@@ -72,11 +71,11 @@ void spi_master_init(void) {
 
   printf("--- SPI MASTER INITIALIZING ---\n");
 
-  // Initialize SPI
-  spi_init(SPI_PORT, 100000);
+  // Initialize SPI - Start conservatively at 1 MHz
+  spi_init(SPI_PORT, 1000000);
   spi_set_slave(SPI_PORT, false);
 
-  // Set communication Format
+  // Set communication Format (Mode 0 is most common)
   spi_set_format(SPI_PORT, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
 
   // Initialize GPIO as SPI
@@ -90,6 +89,7 @@ void spi_master_init(void) {
   gpio_put(CS_PIN, 1);
 
   printf("--- SPI MASTER CONFIGURATION COMPLETE ---\n");
+  printf("SPI Clock: 1 MHz (Safe for most chips)\n");
 }
 
 // Calculates total expected useful payload size from SafeOPS
@@ -106,10 +106,11 @@ size_t get_expected_report_size(void) {
 int spi_transfer_block(spi_inst_t *spi, const uint8_t *tx_buffer,
                        uint8_t *rx_buffer, size_t len) {
   gpio_put(CS_PIN, 0); // Comms up
+  sleep_us(1);         // Small setup time
   int bytes_transferred = spi_write_read_blocking(spi, tx_buffer, rx_buffer,
                                                   len); // Full duplex transmit
   gpio_put(CS_PIN, 1);                                  // Comms down
-  sleep_us(5);                                          // Recovery time
+  sleep_us(10);                                         // Recovery time
   return bytes_transferred;
 }
 
@@ -140,7 +141,7 @@ int spi_OPSAFE_transfer(spi_inst_t *spi, uint8_t *master_rx_buffer,
   memset(master_rx_buffer, 0x00, max_report_len);
 
   // --- Loop iteration to send every opcode ---
-  uint32_t current_rx_offset = 0; // Your RX_OFFSET, renamed
+  uint32_t current_rx_offset = 0;
 
   // Loop over the number of commands for size
   const size_t num_commands = sizeof(safeOps) / sizeof(safeOps[0]);
@@ -203,4 +204,171 @@ const opcode *get_command_by_index(size_t index) {
   return &safeOps[index]; // Return a pointer to the item
 }
 
-// Format Output to JSON
+// Comprehensive JEDEC ID decoder for all major manufacturers
+void decode_jedec_id(uint8_t mfr_id, uint8_t mem_type, uint8_t capacity) {
+  printf("\n=== JEDEC ID Analysis ===\n");
+  printf("Raw bytes: 0x%02X 0x%02X 0x%02X\n", mfr_id, mem_type, capacity);
+
+  // Manufacturer lookup
+  printf("Manufacturer ID: 0x%02X = ", mfr_id);
+  const char *mfr_name = "Unknown";
+  switch (mfr_id) {
+  case 0xEF:
+    mfr_name = "Winbond";
+    break;
+  case 0xC8:
+    mfr_name = "GigaDevice";
+    break;
+  case 0x20:
+    mfr_name = "Micron/Numonyx/ST";
+    break;
+  case 0xBF:
+    mfr_name = "SST/Microchip";
+    break;
+  case 0x1F:
+    mfr_name = "Atmel/Adesto";
+    break;
+  case 0x01:
+    mfr_name = "Spansion/Cypress";
+    break;
+  case 0xC2:
+    mfr_name = "Macronix";
+    break;
+  case 0x9D:
+    mfr_name = "ISSI";
+    break;
+  case 0x37:
+    mfr_name = "AMIC";
+    break;
+  case 0x8C:
+    mfr_name = "ESMT";
+    break;
+  case 0x85:
+    mfr_name = "Puya";
+    break;
+  case 0xA1:
+    mfr_name = "Fudan Microelectronics";
+    break;
+  case 0x0B:
+    mfr_name = "XTX Technology";
+    break;
+  case 0x68:
+    mfr_name = "Boya Microelectronics";
+    break;
+  case 0x5E:
+    mfr_name = "Zbit Semiconductor";
+    break;
+  }
+  printf("%s\n", mfr_name);
+
+  printf("Memory Type: 0x%02X\n", mem_type);
+  printf("Capacity Byte: 0x%02X\n", capacity);
+
+  // Attempt to decode based on manufacturer
+  int decoded = 0;
+
+  // Winbond (0xEF)
+  if (mfr_id == 0xEF) {
+    if (mem_type == 0x40 || mem_type == 0x60 || mem_type == 0x70) {
+      if (capacity >= 0x11 && capacity <= 0x19) {
+        uint32_t size_kb = 1 << (capacity - 10);
+        printf("  -> Winbond W25Q/W25X series: %lu KB (%lu MB)\n",
+               (unsigned long)size_kb, (unsigned long)(size_kb / 1024));
+        decoded = 1;
+      }
+    }
+  }
+
+  // GigaDevice (0xC8)
+  else if (mfr_id == 0xC8) {
+    if (mem_type == 0x40 || mem_type == 0x60) {
+      if (capacity >= 0x11 && capacity <= 0x19) {
+        uint32_t size_kb = 1 << (capacity - 10);
+        printf("  -> GigaDevice GD25Q series: %lu KB (%lu MB)\n",
+               (unsigned long)size_kb, (unsigned long)(size_kb / 1024));
+        decoded = 1;
+      }
+    }
+  }
+
+  // SST/Microchip (0xBF)
+  else if (mfr_id == 0xBF) {
+    if (mem_type == 0x25) {
+      printf("  -> SST25 Series (Standard SPI Flash)\n");
+      decoded = 1;
+    } else if (mem_type == 0x26) {
+      printf("  -> SST26 Series (SuperFlash)\n");
+      switch (capacity) {
+      case 0x41:
+        printf("  -> Model: SST26VF016 (16 Mbit / 2 MB)\n");
+        decoded = 1;
+        break;
+      case 0x42:
+        printf("  -> Model: SST26VF032 (32 Mbit / 4 MB)\n");
+        decoded = 1;
+        break;
+      case 0x43:
+        printf("  -> Model: SST26VF064 (64 Mbit / 8 MB)\n");
+        decoded = 1;
+        break;
+      }
+    }
+  }
+
+  // Macronix (0xC2)
+  else if (mfr_id == 0xC2) {
+    if (mem_type == 0x20 || mem_type == 0x25) {
+      if (capacity >= 0x11 && capacity <= 0x19) {
+        uint32_t size_kb = 1 << (capacity - 10);
+        printf("  -> Macronix MX25L series: %lu KB (%lu MB)\n",
+               (unsigned long)size_kb, (unsigned long)(size_kb / 1024));
+        decoded = 1;
+      }
+    }
+  }
+
+  // Micron/ST (0x20)
+  else if (mfr_id == 0x20) {
+    if (mem_type == 0x20 || mem_type == 0xBA || mem_type == 0xBB) {
+      if (capacity >= 0x11 && capacity <= 0x19) {
+        uint32_t size_kb = 1 << (capacity - 10);
+        printf("  -> Micron/ST M25P/N25Q series: %lu KB (%lu MB)\n",
+               (unsigned long)size_kb, (unsigned long)(size_kb / 1024));
+        decoded = 1;
+      }
+    }
+  }
+
+  // ISSI (0x9D)
+  else if (mfr_id == 0x9D) {
+    if (mem_type == 0x60 || mem_type == 0x70) {
+      if (capacity >= 0x11 && capacity <= 0x19) {
+        uint32_t size_kb = 1 << (capacity - 10);
+        printf("  -> ISSI IS25LP/IS25WP series: %lu KB (%lu MB)\n",
+               (unsigned long)size_kb, (unsigned long)(size_kb / 1024));
+        decoded = 1;
+      }
+    }
+  }
+
+  // Generic capacity decode for unknown chips
+  if (!decoded) {
+    printf("\n--- Generic Capacity Estimation ---\n");
+    if (capacity >= 0x10 && capacity <= 0x22) {
+      uint32_t size_bytes = 1 << capacity;
+      printf("  Standard formula (2^capacity):\n");
+      if (size_bytes >= 1024 * 1024) {
+        printf("    -> %.2f MB (%lu bytes)\n", size_bytes / (1024.0 * 1024.0),
+               (unsigned long)size_bytes);
+      } else if (size_bytes >= 1024) {
+        printf("    -> %lu KB (%lu bytes)\n",
+               (unsigned long)(size_bytes / 1024), (unsigned long)size_bytes);
+      } else {
+        printf("    -> %lu bytes\n", (unsigned long)size_bytes);
+      }
+    }
+    printf("\n  ** Consult datasheet for exact specifications **\n");
+  }
+
+  printf("========================\n");
+}
