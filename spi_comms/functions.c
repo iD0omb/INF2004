@@ -1,4 +1,6 @@
 #include "functions.h"
+#include "flash_db.h"
+#include "flash_info.h"
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
 #include "pico/stdlib.h"
@@ -76,6 +78,9 @@ const opcode safeOps[] = {
 
 // Calculate number of commands (PRIVATE)
 static const size_t num_safe_commands = sizeof(safeOps) / sizeof(safeOps[0]);
+
+// Global instance of flash_info
+flash_info_t flash_info = {0};
 
 // Initialize Master SPI Communications
 void spi_master_init(void) {
@@ -226,175 +231,48 @@ const opcode *get_command_by_index(size_t index) {
   return &safeOps[index]; // Return a pointer to the item
 }
 
-// Comprehensive JEDEC ID decoder for all major manufacturers
-void decode_jedec_id(uint8_t mfr_id, uint8_t mem_type, uint8_t capacity) {
-  printf("\n=== JEDEC ID Analysis ===\n");
-  printf("Raw bytes: 0x%02X 0x%02X 0x%02X\n", mfr_id, mem_type, capacity);
+// Comprehensive JEDEC ID decoder
+int decode_jedec_id(uint8_t mfr_id, uint8_t mem_type, uint8_t capacity) {
+  // Reset Flash Info
+  memset(&flash_info, 0, sizeof(flash_info));
 
-  // Manufacturer lookup
-  printf("Manufacturer ID: 0x%02X = ", mfr_id);
-  const char *mfr_name = "Unknown";
-  switch (mfr_id) {
-  case 0xEF:
-    mfr_name = "Winbond";
-    break;
-  case 0xC8:
-    mfr_name = "GigaDevice";
-    break;
-  case 0x20:
-    mfr_name = "Micron/Numonyx/ST";
-    break;
-  case 0xBF:
-    mfr_name = "SST/Microchip";
-    break;
-  case 0x1F:
-    mfr_name = "Atmel/Adesto";
-    break;
-  case 0x01:
-    mfr_name = "Spansion/Cypress";
-    break;
-  case 0xC2:
-    mfr_name = "Macronix";
-    break;
-  case 0x9D:
-    mfr_name = "ISSI";
-    break;
-  case 0x37:
-    mfr_name = "AMIC";
-    break;
-  case 0x8C:
-    mfr_name = "ESMT";
-    break;
-  case 0x85:
-    mfr_name = "Puya";
-    break;
-  case 0xA1:
-    mfr_name = "Fudan Microelectronics";
-    break;
-  case 0x0B:
-    mfr_name = "XTX Technology";
-    break;
-  case 0x68:
-    mfr_name = "Boya Microelectronics";
-    break;
-  case 0x5E:
-    mfr_name = "Zbit Semiconductor";
-    break;
-  }
-  printf("%s\n", mfr_name);
-
-  printf("Memory Type: 0x%02X\n", mem_type);
-  printf("Capacity Byte: 0x%02X\n", capacity);
-
-  // Attempt to decode based on manufacturer
-  int decoded = 0;
-
-  // Winbond (0xEF)
-  if (mfr_id == 0xEF) {
-    if (mem_type == 0x40 || mem_type == 0x60 || mem_type == 0x70) {
-      if (capacity >= 0x11 && capacity <= 0x19) {
-        uint32_t size_kb = 1 << (capacity - 10);
-        printf("  -> Winbond W25Q/W25X series: %lu KB (%lu MB)\n",
-               (unsigned long)size_kb, (unsigned long)(size_kb / 1024));
-        decoded = 1;
-      }
-    }
+  // Lookup manufacturer name
+  const char *mfr_name = lookup_manufacturer(mfr_id);
+  if (mfr_name) {
+    strncpy(flash_info.manufacturer, mfr_name,
+            sizeof(flash_info.manufacturer) - 1);
+  } else {
+    strncpy(flash_info.manufacturer, "Unknown",
+            sizeof(flash_info.manufacturer) - 1);
   }
 
-  // GigaDevice (0xC8)
-  else if (mfr_id == 0xC8) {
-    if (mem_type == 0x40 || mem_type == 0x60) {
-      if (capacity >= 0x11 && capacity <= 0x19) {
-        uint32_t size_kb = 1 << (capacity - 10);
-        printf("  -> GigaDevice GD25Q series: %lu KB (%lu MB)\n",
-               (unsigned long)size_kb, (unsigned long)(size_kb / 1024));
-        decoded = 1;
-      }
-    }
-  }
+  // Temp Text, SFDP will update
+  strncpy(flash_info.model, "Unknown", sizeof(flash_info.model) - 1);
 
-  // SST/Microchip (0xBF)
-  else if (mfr_id == 0xBF) {
-    if (mem_type == 0x25) {
-      printf("  -> SST25 Series (Standard SPI Flash)\n");
-      decoded = 1;
-    } else if (mem_type == 0x26) {
-      printf("  -> SST26 Series (SuperFlash)\n");
-      switch (capacity) {
-      case 0x41:
-        printf("  -> Model: SST26VF016 (16 Mbit / 2 MB)\n");
-        decoded = 1;
-        break;
-      case 0x42:
-        printf("  -> Model: SST26VF032 (32 Mbit / 4 MB)\n");
-        decoded = 1;
-        break;
-      case 0x43:
-        printf("  -> Model: SST26VF064 (64 Mbit / 8 MB)\n");
-        decoded = 1;
-        break;
-      }
-    }
+  // ID Validity
+  if ((mfr_id == 0xFF && mem_type == 0xFF && capacity == 0xFF) ||
+      (mfr_id == 0x00 && mem_type == 0x00 && capacity == 0x00)) {
+    return 0; // Invalid / no response
   }
-
-  // Macronix (0xC2)
-  else if (mfr_id == 0xC2) {
-    if (mem_type == 0x20 || mem_type == 0x25) {
-      if (capacity >= 0x11 && capacity <= 0x19) {
-        uint32_t size_kb = 1 << (capacity - 10);
-        printf("  -> Macronix MX25L series: %lu KB (%lu MB)\n",
-               (unsigned long)size_kb, (unsigned long)(size_kb / 1024));
-        decoded = 1;
-      }
-    }
-  }
-
-  // Micron/ST (0x20)
-  else if (mfr_id == 0x20) {
-    if (mem_type == 0x20 || mem_type == 0xBA || mem_type == 0xBB) {
-      if (capacity >= 0x11 && capacity <= 0x19) {
-        uint32_t size_kb = 1 << (capacity - 10);
-        printf("  -> Micron/ST M25P/N25Q series: %lu KB (%lu MB)\n",
-               (unsigned long)size_kb, (unsigned long)(size_kb / 1024));
-        decoded = 1;
-      }
-    }
-  }
-
-  // ISSI (0x9D)
-  else if (mfr_id == 0x9D) {
-    if (mem_type == 0x60 || mem_type == 0x70) {
-      if (capacity >= 0x11 && capacity <= 0x19) {
-        uint32_t size_kb = 1 << (capacity - 10);
-        printf("  -> ISSI IS25LP/IS25WP series: %lu KB (%lu MB)\n",
-               (unsigned long)size_kb, (unsigned long)(size_kb / 1024));
-        decoded = 1;
-      }
-    }
-  }
-
-  // Generic capacity decode for unknown chips
-  if (!decoded) {
-    printf("\n--- Generic Capacity Estimation ---\n");
-    if (capacity >= 0x10 && capacity <= 0x22) {
-      uint32_t size_bytes = 1 << capacity;
-      printf("  Standard formula (2^capacity):\n");
-      if (size_bytes >= 1024 * 1024) {
-        printf("    -> %.2f MB (%lu bytes)\n", size_bytes / (1024.0 * 1024.0),
-               (unsigned long)size_bytes);
-      } else if (size_bytes >= 1024) {
-        printf("    -> %lu KB (%lu bytes)\n",
-               (unsigned long)(size_bytes / 1024), (unsigned long)size_bytes);
-      } else {
-        printf("    -> %lu bytes\n", (unsigned long)size_bytes);
-      }
-    }
-    printf("\n  ** Consult datasheet for exact specifications **\n");
-  }
-
-  printf("========================\n");
+  return 1; // Valid!
 }
+// Print JEDEC Report
+void print_jedec_report(uint8_t mfr_id, uint8_t mem_type, uint8_t capacity) {
+  print_section("JEDEC ID Analysis");
 
+  printf("│ Raw bytes      : 0x%02X 0x%02X 0x%02X\n", mfr_id, mem_type,
+         capacity);
+
+  printf("│ Manufacturer   : %s\n", flash_info.manufacturer);
+  printf("| Memory Type    : 0x%02X\n", mem_type);
+  printf("| Capacity Byte  : 0x%02X\n", capacity);
+  // Only show model line if you set it from SFDP previously
+  if (flash_info.model[0] != '\0' && strcmp(flash_info.model, "Unknown") != 0) {
+    printf("| Model          : %s\n", flash_info.model);
+  }
+
+  print_separator();
+}
 // Decode the SFDP Table
 void decode_sfdp_header(const uint8_t *sfdp) {
   print_section("SFDP Header");
@@ -425,8 +303,6 @@ void decode_sfdp_header(const uint8_t *sfdp) {
 
 // Decode SFDP Params Headers
 void decode_sfdp_param_headers(const uint8_t *buf) {
-  print_section("SFDP Parameter Headers");
-
   for (int i = 0; i < 3; i++) {
     const uint8_t *e = &buf[i * 8];
 
