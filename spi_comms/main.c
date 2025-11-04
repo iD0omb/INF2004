@@ -405,7 +405,7 @@ int main() {
       free(report);
 
       print_separator();
-      printf("\nPress any key too return...");
+      printf("\nPress any key to return...");
       get_menu_choice();
       break;
     }
