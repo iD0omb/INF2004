@@ -10,72 +10,86 @@
 #include <string.h>
 
 // SAFE OPCODE MAPPING - Generic commands that work across most SPI flash chips
+
 const opcode safeOps[] = {
 
-    // Read JEDEC ID (Standard across all manufacturers)
+    // JEDEC ID: must send only 1 byte (0x9F)
     {
         .opcode = 0x9F,
-        .tx_len = 4,
-        .rx_data_len = 3,
-        .description = "Read JEDEC ID (Mfr/Type/Capacity)",
+        .tx_len = 1,      // send only the opcode
+        .rx_data_len = 3, // read 3 bytes (Mfr, Type, Capacity)
+        .description = "JEDEC ID",
     },
-    // Read Status Register-1 (Standard)
+
+    // Read Status Register-1
     {
         .opcode = 0x05,
-        .tx_len = 2,
-        .rx_data_len = 1,
-        .description = "Read Status Register-1",
+        .tx_len = 1,      // send only the opcode
+        .rx_data_len = 1, // read 1 status byte
+        .description = "Read Status Register 1",
     },
-    // Read Status Register-2 (Common but not universal)
+
+    // Read Status Register-2
     {
         .opcode = 0x35,
-        .tx_len = 2,
+        .tx_len = 1,
         .rx_data_len = 1,
-        .description = "Read Status Register-2",
+        .description = "Read Status Register 2",
     },
-    // Read Status Register-3 (Common but not universal)
+
+    // Read Status Register-3
     {
         .opcode = 0x15,
-        .tx_len = 2,
+        .tx_len = 1,
         .rx_data_len = 1,
-        .description = "Read Status Register-3",
+        .description = "Read Status Register 3",
     },
-    // Legacy Read Manufacturer/DeviceID
+
+    // Legacy Read Manufacturer / Device ID (0x90)
+    // Format: 90h, dummy(3), addr(2), read(2)
     {
         .opcode = 0x90,
-        .tx_len = 6,
-        .rx_data_len = 2,
-        .description = "Legacy Read Mfr/Device ID",
+        .tx_len = 4,      // 1 opcode + 3 dummy bytes
+        .rx_data_len = 2, // returns manufacturer + device ID
+        .description = "Read Mfr/Device ID (Legacy)",
     },
-    // Read Electronic Signature (Alternative ID method)
+
+    // Read Electronic Signature (0xAB)
+    // Format: ABh then 3 dummy bytes, then read 1 byte
     {
         .opcode = 0xAB,
-        .tx_len = 5,
-        .rx_data_len = 1,
+        .tx_len = 4,      // opcode + 3 dummy
+        .rx_data_len = 1, // signature
         .description = "Read Electronic Signature",
     },
-    // Read Unique ID (If supported)
+
+    // Read Unique ID (0x4B)
+    // Format: 4Bh + 4 dummy bytes, then read 8 bytes
     {
         .opcode = 0x4B,
-        .tx_len = 13,
-        .rx_data_len = 8,
+        .tx_len = 5,      // opcode + 4 dummy bytes
+        .rx_data_len = 8, // 64-bit UID
         .description = "Read Unique ID (64-bit)",
     },
-    // Read SFDP Headers
-    {
-        .opcode = 0x5A,
-        .tx_len = 13,
-        .rx_data_len = 8,
-        .description = "Read SFDP Table Headers",
-    },
-    // Read SFDP Parameter Headers (After SFDP Headers)
-    {
-        .opcode = 0x5A,
-        .tx_len = 29, // address + dummie + 24 data bytes
-        .rx_data_len = 24,
-        .description = "SFDP Parameter Headers",
-    }};
 
+    // Read SFDP Header (0x5A)
+    // Format: 5Ah + 3-byte address + dummy, then read
+    {
+        .opcode = 0x5A,
+        .tx_len = 5,      // opcode + 3-byte address + 1 dummy
+        .rx_data_len = 8, // read 8 bytes of header
+        .description = "Read SFDP Header",
+    },
+
+    // Read SFDP Parameter Table (0x5A)
+    {
+        .opcode = 0x5A,
+        .tx_len = 5,       // opcode + 3-byte address + 1 dummy
+        .rx_data_len = 24, // read 24 bytes of parameter header
+        .description = "Read SFDP Parameter Headers",
+    }
+
+};
 // Calculate number of commands (PRIVATE)
 static const size_t num_safe_commands = sizeof(safeOps) / sizeof(safeOps[0]);
 
@@ -136,88 +150,68 @@ int spi_transfer_block(spi_inst_t *spi, const uint8_t *tx_buffer,
 // Send one single opcode and write to RX_BUFF
 int spi_ONE_transfer(spi_inst_t *spi, opcode Opcode, uint8_t *tx_buffer,
                      uint8_t *rx_buffer) {
-  if (Opcode.tx_len == 0) {
+  if (Opcode.tx_len == 0)
     return 0;
-  }
-
-  // Prepare transmission block
+  // Send opcode only
   tx_buffer[0] = Opcode.opcode;
-  // Fill rest of array with dummy bytes
-  memset(&tx_buffer[1], 0x00, Opcode.tx_len - 1);
+  gpio_put(CS_PIN, 0);
+  spi_write_blocking(spi, tx_buffer, Opcode.tx_len);
 
-  // Transmit
-  int bytes_transferred =
-      spi_transfer_block(spi, tx_buffer, rx_buffer, Opcode.tx_len);
+  // Read full response
+  spi_read_blocking(spi, 0x00, rx_buffer, Opcode.rx_data_len);
+  gpio_put(CS_PIN, 1);
 
-  return bytes_transferred;
+  return Opcode.rx_data_len;
 }
 
 // Transfer full SAFE Array block and write responses to the RX buffer
+
 int spi_OPSAFE_transfer(spi_inst_t *spi, uint8_t *master_rx_buffer,
                         size_t max_report_len) {
-  // --- Fill master rx with 0x00s first  ---
   memset(master_rx_buffer, 0x00, max_report_len);
 
-  // --- Loop iteration to send every opcode ---
-  uint32_t current_rx_offset = 0;
-
-  // Loop over the number of commands for size
+  size_t offset = 0;
   const size_t num_commands = sizeof(safeOps) / sizeof(safeOps[0]);
+  size_t expected = get_expected_report_size();
 
-  // Check if the provided buffer is large enough
-  size_t expected_size = get_expected_report_size();
-  if (max_report_len < expected_size) {
-    printf("ERROR: Master buffer is too small (%zu bytes). Need %zu bytes.\n",
-           max_report_len, expected_size);
-    return -1; // Error code
+  if (max_report_len < expected) {
+    printf("ERROR: master buffer too small (%zu < %zu)\n", max_report_len,
+           expected);
+    return -1;
   }
 
   printf("Executing %zu safe commands...\n", num_commands);
 
   for (size_t i = 0; i < num_commands; i++) {
-    const opcode *command = &safeOps[i];
+    const opcode *cmd = &safeOps[i];
 
-    // Calculate junk length (header size) to find where data starts
-    const size_t junk_len = command->tx_len - command->rx_data_len;
+    // --- Build TX buffer according to tx_len ---
+    uint8_t tx[cmd->tx_len];
+    memset(tx, 0x00, cmd->tx_len);
+    tx[0] = cmd->opcode;
 
-    // Create temporary local buffers for this *single* transfer
-    uint8_t local_tx_buffer[command->tx_len];
-    uint8_t local_rx_buffer[command->tx_len];
-
-    // --- Assemble and Send one command ---
-
-    // Assemble the TX buffer (Opcode + Dummies)
-    local_tx_buffer[0] = command->opcode;
-    memset(&local_tx_buffer[1], 0x00, command->tx_len - 1); // Fill dummies
-
-    // SFDP Header assembly
-    if (command->opcode == 0x5A && command->rx_data_len == 24) {
-      // Address bytes
-      local_tx_buffer[1] = 0x08;
-      local_tx_buffer[2] = 0x00;
-      local_tx_buffer[3] = 0x00;
-      // Dummies already set from memset above
+    // SFDP special case: parameter header (0x5A, 24 bytes)
+    if (cmd->opcode == 0x5A && cmd->rx_data_len == 24) {
+      tx[1] = 0x08; // address = 0x000008
+      tx[2] = 0x00;
+      tx[3] = 0x00;
+      // tx[4] is dummy, already 0
     }
 
-    // Call the low-level helper to do the transfer
-    spi_transfer_block(spi, local_tx_buffer, local_rx_buffer, command->tx_len);
+    // --- Do proper SPI: write THEN read ---
+    gpio_put(CS_PIN, 0);
+    spi_write_blocking(spi, tx, cmd->tx_len);
 
-    // Offset the master rx ---
+    uint8_t rx[cmd->rx_data_len];
+    spi_read_blocking(spi, 0x00, rx, cmd->rx_data_len);
+    gpio_put(CS_PIN, 1);
 
-    // Copy only the useful data from the local buffer
-    memcpy(&master_rx_buffer[current_rx_offset], // Destination
-           &local_rx_buffer[junk_len],           // Source (starts after junk)
-           command->rx_data_len);                // Length (useful data)
-
-    // Advance the offset for the next command's data
-    current_rx_offset += command->rx_data_len;
+    // --- Store directly (no junk math) ---
+    memcpy(&master_rx_buffer[offset], rx, cmd->rx_data_len);
+    offset += cmd->rx_data_len;
   }
 
-  printf("All commands complete. Total useful data stored: %u bytes.\n",
-         (unsigned int)current_rx_offset);
-
-  // Return the number of bytes written to the report
-  return current_rx_offset;
+  return (int)offset;
 }
 
 // Gets the total number of commands in the safeOps Mapping

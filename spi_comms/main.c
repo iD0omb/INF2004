@@ -223,42 +223,37 @@ int main() {
 
     switch (choice) {
 
-    // --- [1] Identify Chip ---
+      // --- [1] Identify Chip ---
+
     case '1': {
       clear_screen();
       print_header("CHIP IDENTIFICATION");
       printf("\nReading JEDEC ID (0x9F)...\n");
       print_separator();
 
-      // Find the JEDEC ID command in the map (assumes it's index 0)
       const opcode *jedec_cmd = get_command_by_index(0);
 
-      if (jedec_cmd == NULL || jedec_cmd->opcode != 0x9F) {
-        printf("\nError: JEDEC ID command not found in map.\n");
-        break;
-      }
-
-      uint8_t tx_buffer[jedec_cmd->tx_len];
-      uint8_t rx_buffer[jedec_cmd->tx_len];
+      uint8_t tx_buffer[1];
+      uint8_t rx_buffer[3];
 
       int result = spi_ONE_transfer(SPI_PORT, *jedec_cmd, tx_buffer, rx_buffer);
 
-      if (result > 0) {
-        // Data starts after the junk
-        size_t data_start = jedec_cmd->tx_len - jedec_cmd->rx_data_len;
-        uint8_t mfr_id = rx_buffer[data_start];
-        uint8_t mem_type = rx_buffer[data_start + 1];
-        uint8_t capacity = rx_buffer[data_start + 2];
+      gpio_put(CS_PIN, 1);
 
-        // Call the new helper function to print the decoded ID
-        if (decode_jedec_id(mfr_id, mem_type, capacity)) {
-          print_jedec_report(mfr_id, mem_type, capacity);
+      if (result == 3) {
+        printf("Raw JEDEC: %02X %02X %02X\n", rx_buffer[0], rx_buffer[1],
+               rx_buffer[2]);
+
+        if (decode_jedec_id(rx_buffer[0], rx_buffer[1], rx_buffer[2])) {
+          print_jedec_report(rx_buffer[0], rx_buffer[1], rx_buffer[2]);
         } else {
-          printf("\nERROR - Invalid JEDEC ID Response!\n");
+          printf("ERROR: Invalid JEDEC response\n");
         }
+      } else {
+        printf("ERROR: JEDEC read failed\n");
       }
+
       print_separator();
-      printf("\nPress any key to return to menu...");
       get_menu_choice();
       break;
     }
@@ -353,28 +348,34 @@ int main() {
       get_menu_choice();
       break;
     }
-    // --- [4] JSON EXPORT ---
+      // --- [4] JSON EXPORT ---
+
     case '4': {
       clear_screen();
       print_header("JSON EXPORT");
 
-      size_t exp = get_expected_report_size();
-      if (exp == 0) {
-        printf("\nERROR: expected report size is 0! \n");
+      // Compute total data we expect from safeOps
+      size_t expected = get_expected_report_size();
+      if (expected == 0) {
+        printf("\nERROR: No commands defined!\n");
         print_separator();
         printf("\nPress any key...");
         get_menu_choice();
         break;
       }
-      uint8_t *report = malloc(exp);
+
+      // Allocate RX buffer for safeOps data
+      uint8_t *report = malloc(expected);
       if (!report) {
-        printf("\nMemory Allocation failed!\n");
+        printf("\nMemory allocation failed for report buffer!\n");
         print_separator();
         printf("\nPress any key...");
         get_menu_choice();
         break;
       }
-      int stored = spi_OPSAFE_transfer(SPI_PORT, report, exp);
+
+      // Run the full safe-op scan
+      int stored = spi_OPSAFE_transfer(SPI_PORT, report, expected);
       if (stored <= 0) {
         printf("\nSafe block transfer failed.\n");
         free(report);
@@ -384,23 +385,26 @@ int main() {
         break;
       }
 
-      size_t json_cap =
-          (size_t)stored * 10 + 4096; // safety margin for hex-expanded JSON
+      // JSON buffer sizing
+      size_t json_cap = (size_t)stored * 12 + 4096; // safe margin
       char *json = malloc(json_cap);
       if (!json) {
-        printf("\nJSON buffer allocation failed.\n");
+        printf("\nJSON allocation failed!\n");
         free(report);
         print_separator();
         printf("\nPress any key...");
         get_menu_choice();
         break;
       }
+
+      // Produce JSON: includes raw hex + translated manufacturer
       size_t written = json_export_full_report(json, json_cap, report, stored);
       if (written == 0) {
-        printf("\nJSON export failed - buffer too small?\n");
+        printf("\nJSON export failed (buffer too small?)\n");
       } else {
         printf("\n%s\n", json);
       }
+
       free(json);
       free(report);
 

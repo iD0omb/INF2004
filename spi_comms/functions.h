@@ -60,4 +60,5 @@ void print_section(const char *section_name);
 void print_separator(void);
 char get_menu_choice(void);
 void print_jedec_report(uint8_t mfr_id, uint8_t mem_type, uint8_t capacity);
+
 #endif
