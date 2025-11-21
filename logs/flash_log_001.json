@@ -1,0 +1,116 @@
+{
+    "device": {
+        "jedec": {
+            "manufacturer_id": "BF",
+            "manufacturer_name": "SST / Microchip",
+            "memory_type": "26",
+            "capacity_code": "41",
+            "capacity_bytes": "0"
+        }
+    },
+    "commands": [
+        {
+            "name": "Read JEDEC ID (Mfr/Type/Capacity)",
+            "opcode": "9F",
+            "data": [
+                "BF",
+                "26",
+                "41"
+            ]
+        },
+        {
+            "name": "Read Status Register-1",
+            "opcode": "05",
+            "data": [
+                "00"
+            ]
+        },
+        {
+            "name": "Read Status Register-2",
+            "opcode": "35",
+            "data": [
+                "08"
+            ]
+        },
+        {
+            "name": "Read Status Register-3",
+            "opcode": "15",
+            "data": [
+                "00"
+            ]
+        },
+        {
+            "name": "Legacy Read Mfr/Device ID",
+            "opcode": "90",
+            "data": [
+                "00",
+                "00"
+            ]
+        },
+        {
+            "name": "Read Electronic Signature",
+            "opcode": "AB",
+            "data": [
+                "41"
+            ]
+        },
+        {
+            "name": "Read Unique ID (64-bit)",
+            "opcode": "4B",
+            "data": [
+                "00",
+                "00",
+                "00",
+                "00",
+                "00",
+                "00",
+                "00",
+                "00"
+            ]
+        },
+        {
+            "name": "Read SFDP Table Headers",
+            "opcode": "5A",
+            "data": [
+                "53",
+                "46",
+                "44",
+                "50",
+                "06",
+                "01",
+                "02",
+                "FF"
+            ]
+        },
+        {
+            "name": "SFDP Parameter Headers",
+            "opcode": "5A",
+            "data": [
+                "53",
+                "46",
+                "44",
+                "50",
+                "06",
+                "01",
+                "02",
+                "FF",
+                "00",
+                "06",
+                "01",
+                "10",
+                "30",
+                "00",
+                "00",
+                "FF",
+                "81",
+                "00",
+                "01",
+                "06",
+                "00",
+                "01",
+                "00",
+                "FF"
+            ]
+        }
+    ]
+}
