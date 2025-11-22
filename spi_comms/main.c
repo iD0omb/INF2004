@@ -200,6 +200,7 @@ void print_main_menu() {
   printf("  [2] Full Safe Read Report\n");
   printf("  [3] Individual Safe Commands\n");
   printf("  [4] Export Full Safe Report in JSON\n");
+  printf("  [5] Execute Destructive Commands (Write/Erase)\n");
   printf("\n");
   printf("──────────────────────────────────────────\n");
 }
@@ -412,6 +413,98 @@ int main() {
       printf("\nPress any key to return...");
       get_menu_choice();
       break;
+    }
+
+    // --- [5] Execute Destructive Commands (Write/Erase) ---
+    case '5': {
+        clear_screen();
+        print_header("DESTRUCTIVE COMMANDS MENU");
+
+        printf("Select Operation:\n");
+        printf("  [1] Page Program (Write up to 256 bytes)\n");
+        printf("  [2] Sector Erase 4KB\n");
+        printf("\nEnter choice: ");
+        char op_choice = get_menu_choice();
+
+        if (op_choice != '1' && op_choice != '2') {
+            printf("\nInvalid selection.\nPress any key to return...");
+            get_menu_choice();
+            break;
+        }
+
+        // --- Get 24-bit address from user ---
+        uint32_t address = 0;
+        printf("\nEnter 24-bit address in hex (e.g., 0x000000): 0x");
+        scanf("%06x", &address);
+
+        uint8_t tx[260] = {0};  // Max page size + opcode + 3-byte addr
+        uint8_t rx[1] = {0};
+
+        tx[1] = (address >> 16) & 0xFF;
+        tx[2] = (address >> 8) & 0xFF;
+        tx[3] = address & 0xFF;
+
+        // --- Send Write Enable first ---
+        printf("\nSending Write Enable (WREN)...\n");
+        spi_ONE_transfer(SPI_PORT, desOps[0], tx, rx);
+        sleep_ms(1);
+
+        if (op_choice == '1') {
+            // Page Program
+            tx[0] = desOps[2].opcode; // 0x02
+
+            // Ask user for number of bytes to write
+            size_t data_len = 0;
+            printf("Enter number of bytes to write (1-256): ");
+            scanf("%zu", &data_len);
+            if (data_len > 256) data_len = 256;
+
+            // For demo, fill payload with 0xAA
+            for (size_t i = 0; i < data_len; i++) {
+                tx[4 + i] = 0xAA;
+            }
+
+            printf("\nWriting %zu bytes to address 0x%06X...\n", data_len, address);
+            spi_ONE_transfer(SPI_PORT, desOps[2], tx, rx);
+
+        } else if (op_choice == '2') {
+            // Sector Erase 4KB
+            tx[0] = desOps[3].opcode; // 0x20
+            printf("\nErasing 4KB sector at address 0x%06X...\n", address);
+            spi_ONE_transfer(SPI_PORT, desOps[3], tx, rx);
+        }
+
+        // --- Send Write Disable after operation ---
+        printf("Disabling write (WRDI)...\n");
+        spi_ONE_transfer(SPI_PORT, desOps[1], tx, rx);
+
+        // --- Read back 16 bytes to verify ---
+        opcode readDataOp = {
+            .opcode = 0x03,
+            .tx_len = 4,
+            .rx_data_len = 16,
+            .description = "Read Data"
+        };
+
+        tx[0] = readDataOp.opcode;
+        tx[1] = (address >> 16) & 0xFF;
+        tx[2] = (address >> 8) & 0xFF;
+        tx[3] = address & 0xFF;
+
+        uint8_t read_buffer[16] = {0};
+        spi_ONE_transfer(SPI_PORT, readDataOp, tx, read_buffer);
+
+        printf("\nRead back 16 bytes at 0x%06X:\n", address);
+        for (int i = 0; i < 16; i++) {
+            printf("0x%02X ", read_buffer[i]);
+        }
+        printf("\n");
+
+        // --- Done ---
+        print_separator();
+        printf("Operation complete! Press any key to return to menu...");
+        get_menu_choice();
+        break;
     }
 
     default:

@@ -89,6 +89,55 @@ const opcode safeOps[] = {
         .description = "Read SFDP Parameter Headers",
     }
 
+// DESTRUCTIVE OPCODE MAPPING - Commands that write/erase flash
+
+const opcode desOps[] = {
+
+    // Write Enable (WREN) - Must be sent before any write/erase
+    {
+        .opcode = 0x06,
+        .tx_len = 1,      // send only the opcode
+        .rx_data_len = 0, // no data returned
+        .description = "Write Enable (WREN)",
+    },
+
+    // Write Disable (WRDI)
+    {
+        .opcode = 0x04,
+        .tx_len = 1,
+        .rx_data_len = 0,
+        .description = "Write Disable (WRDI)",
+    },
+
+    // Page Program (0x02)
+    // Format: 02h + 3-byte address + up to 256 bytes data
+    {
+        .opcode = 0x02,
+        .tx_len = 4,      // opcode + 3-byte address, data appended separately
+        .rx_data_len = 0, // no data returned
+        .description = "Page Program (write up to 256 bytes)",
+    },
+
+    // Sector Erase 4KB (0x20)
+    // Format: 20h + 3-byte address
+    {
+        .opcode = 0x20,
+        .tx_len = 4,      // opcode + 3-byte address
+        .rx_data_len = 0, // no data returned
+        .description = "Sector Erase 4KB",
+    }
+};
+
+opcode readDataOp = {
+    .opcode = 0x03,
+    .tx_len = 4,       // opcode + 3-byte address
+    .rx_data_len = 16, // number of bytes to read back (adjust as needed)
+    .description = "Read Data"
+};
+
+// Calculate number of destructive commands
+static const size_t num_destructive_commands = sizeof(desOps) / sizeof(desOps[0]);
+
 };
 // Calculate number of commands (PRIVATE)
 static const size_t num_safe_commands = sizeof(safeOps) / sizeof(safeOps[0]);
@@ -223,6 +272,14 @@ const opcode *get_command_by_index(size_t index) {
     return NULL;
   }
   return &safeOps[index]; // Return a pointer to the item
+}
+
+// To get pointer to destructive opcode by index
+const opcode *get_destructive_command_by_index(size_t index) {
+    if (index >= num_destructive_commands) {
+        return NULL;
+    }
+    return &desOps[index];
 }
 
 // Comprehensive JEDEC ID decoder
