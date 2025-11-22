@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.13)
 include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 
 # This name can be anything. It does not need to be "spi_comms".
-project(spi_flash_webgui C CXX ASM)
+project(main C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 
@@ -16,8 +16,8 @@ pico_sdk_init()
 #  Main executable
 # ============================
 # The first word here becomes your output filename (spi_flash_webgui.uf2)
-add_executable(spi_flash_webgui
-    integrated_spi_webgui.c
+add_executable(main
+    main.c 
     functions.c 
     json.c    
     flash_db.c
@@ -30,7 +30,7 @@ add_executable(spi_flash_webgui
 # ============================
 #  Include directories
 # ============================
-target_include_directories(spi_flash_webgui PRIVATE
+target_include_directories(main PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/fatfs
 )
@@ -39,7 +39,7 @@ target_include_directories(spi_flash_webgui PRIVATE
 #  Libraries
 # ============================
 # This name MUST match the add_executable name above
-target_link_libraries(spi_flash_webgui
+target_link_libraries(main
     pico_stdlib
     hardware_spi
     hardware_gpio
@@ -53,10 +53,10 @@ target_link_libraries(spi_flash_webgui
 # ============================
 #  Enable USB output
 # ============================
-pico_enable_stdio_usb(spi_flash_webgui 1)
-pico_enable_stdio_uart(spi_flash_webgui 0)
+pico_enable_stdio_usb(main 1)
+pico_enable_stdio_uart(main 0)
 
 # ============================
 #  Generate .uf2 firmware
 # ============================
-pico_add_extra_outputs(spi_flash_webgui)
+pico_add_extra_outputs(main)

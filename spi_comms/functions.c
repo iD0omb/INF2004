@@ -90,6 +90,91 @@ const opcode safeOps[] = {
     }
 
 };
+// Decode fuzzer
+const char *decode_opcode_name(uint8_t op) {
+  switch (op) {
+  // --- Standard Reads ---
+  case 0x03:
+    return "Read Data";
+  case 0x0B:
+    return "Fast Read";
+
+  // --- Dual / Quad Reads (The "Hidden" ones you found) ---
+  case 0x3B:
+    return "Fast Read Dual Output";
+  case 0x3D:
+    return "Read Block Lock (Sec)";
+  case 0x6B:
+    return "Fast Read Quad Output";
+  case 0xBB:
+    return "Fast Read Dual I/O";
+  case 0xEB:
+    return "Fast Read Quad I/O";
+  case 0xE7:
+    return "Word Read Quad I/O";
+
+  // --- ID & Registers ---
+  case 0x90:
+    return "Read Manufacturer/Device ID";
+  case 0x92:
+    return "Read Mfr/Dev ID (Dual I/O)";
+  case 0x94:
+    return "Read Mfr/Dev ID (Quad I/O)";
+  case 0x9F:
+    return "JEDEC ID";
+  case 0x48:
+    return "Read Security Registers";
+  case 0x5A:
+    return "Read SFDP Parameters";
+
+  // --- Status / Config ---
+  case 0x05:
+    return "Read Status Register-1";
+  case 0x35:
+    return "Read Status Register-2";
+  case 0x15:
+    return "Read Status Register-3";
+  case 0x01:
+    return "Write Status Register-1";
+  case 0x31:
+    return "Write Status Register-2";
+  case 0x11:
+    return "Write Status Register-3";
+
+  // --- Program / Erase (Dangerous!) ---
+  case 0x02:
+    return "Page Program";
+  case 0x32:
+    return "Quad Page Program";
+  case 0x20:
+    return "Sector Erase (4KB)";
+  case 0x52:
+    return "Block Erase (32KB)";
+  case 0xD8:
+    return "Block Erase (64KB)";
+  case 0xC7:
+    return "Chip Erase";
+  case 0x60:
+    return "Chip Erase";
+
+  // --- Control ---
+  case 0x06:
+    return "Write Enable (WREN)";
+  case 0x04:
+    return "Write Disable (WRDI)";
+  case 0x66:
+    return "Enable Reset";
+  case 0x99:
+    return "Reset Device";
+  case 0xB9:
+    return "Deep Power Down";
+  case 0xAB:
+    return "Release Power Down / Device ID";
+
+  default:
+    return "UNKNOWN / UNDOCUMENTED";
+  }
+}
 // Calculate number of commands (PRIVATE)
 static const size_t num_safe_commands = sizeof(safeOps) / sizeof(safeOps[0]);
 
@@ -217,6 +302,96 @@ int spi_OPSAFE_transfer(spi_inst_t *spi, uint8_t *master_rx_buffer,
   }
 
   return (int)offset;
+}
+
+// --- FUZZING INTEGRATION ---
+
+// Helper to check if an opcode exists in known safeOps list
+const char *get_known_opcode_desc(uint8_t op) {
+  for (size_t i = 0; i < num_safe_commands; i++) {
+    if (safeOps[i].opcode == op) {
+      return safeOps[i].description;
+    }
+  }
+  return NULL;
+}
+
+// The Fuzzer: Scans 0x00-0xFF for undocumented commands
+void spi_fuzz_scan(spi_inst_t *spi) {
+  printf("\n--- STARTING OPCODE FUZZING SCAN ---\n");
+  printf(
+      "WARNING: This performs blind reads. Power cycle target if it hangs.\n");
+
+  uint8_t rx_buffer[8];
+
+  // Iterate through all possible 8-bit opcodes
+  for (int i = 0; i <= 255; i++) {
+    uint8_t op = (uint8_t)i;
+
+    // 1. Safety Checks
+    if (op == 0xB9) {
+      printf("[0x%02X] SKIPPED (Safety: Deep Power Down)\n", op);
+      continue;
+    }
+
+    // 2. Check if we already know this command
+    const char *known_desc = get_known_opcode_desc(op);
+    if (known_desc) {
+      // Uncomment to see known commands during scan
+      // printf("[0x%02X] KNOWN: %s\n", op, known_desc);
+      continue;
+    }
+
+    // 3. Perform the Fuzz Transaction
+    gpio_put(CS_PIN, 0);
+    sleep_us(1);
+
+    // Write the opcode
+    spi_write_blocking(spi, &op, 1);
+
+    // Read potential response
+    spi_read_blocking(spi, 0x00, rx_buffer, sizeof(rx_buffer));
+
+    sleep_us(1);
+    gpio_put(CS_PIN, 1);
+    sleep_us(50);
+
+    // 4. Analyze: Is the data interesting?
+    bool interesting = false;
+    int ff_count = 0;
+    int zero_count = 0;
+
+    for (int k = 0; k < sizeof(rx_buffer); k++) {
+      if (rx_buffer[k] == 0xFF)
+        ff_count++;
+      if (rx_buffer[k] == 0x00)
+        zero_count++;
+    }
+
+    if (ff_count != sizeof(rx_buffer) && zero_count != sizeof(rx_buffer)) {
+      interesting = true;
+    }
+
+    // 5. Report findings
+    if (interesting) {
+      const char *name = decode_opcode_name(op);
+
+      // Print Opcode + Name
+      printf("[0x%02X] %-25s | Data: ", op, name);
+
+      for (int k = 0; k < sizeof(rx_buffer); k++) {
+        printf("%02X ", rx_buffer[k]);
+      }
+
+      printf("| ASCII: ");
+      for (int k = 0; k < sizeof(rx_buffer); k++) {
+        printf("%c", (rx_buffer[k] >= 32 && rx_buffer[k] <= 126) ? rx_buffer[k]
+                                                                 : '.');
+      }
+      printf("\n");
+    }
+  }
+  printf("--- SCAN COMPLETE ---\n");
 }
 
 // Gets the total number of commands in the safeOps Mapping

@@ -972,7 +972,8 @@ void print_main_menu(void) {
   printf("  [5] READ Flash (Raw Bytes)\n");
   printf("  [6] WRITE Flash (Text String)\n");
   printf("  [7] ERASE Flash (Sector Aligned)\n");
-  printf("\n");
+  printf("──────────────────────────────────────────\n");
+  printf("  [8] Opcode Fuzzing (Dangerous)\n");
   printf("──────────────────────────────────────────\n");
 }
 
@@ -1118,33 +1119,74 @@ void cli_core(void) {
     }
 
     case '5': {
-      // --- READ FLASH ---
+      // --- READ FLASH (Canonical Hex + ASCII) ---
       clear_screen();
       print_header("READ FLASH");
       uint32_t addr = get_hex_input("Enter Start Address (e.g. 0x0000): ");
       uint32_t len = get_hex_input("Enter Length (bytes): ");
 
-      if (len > 4096)
-        len = 4096; // Limit display for CLI
+      // Safety limit for CLI buffer
+      if (len > 4096) {
+        printf("Limiting length to 4096 bytes for CLI display.\n");
+        len = 4096;
+      }
 
       uint8_t *buf = malloc(len);
-      if (flash_read_bytes(addr, buf, len)) {
-        printf("\nData at 0x%06X:\n", (unsigned int)addr);
-        for (uint32_t i = 0; i < len; i++) {
-          if (i % 16 == 0)
-            printf("\n0x%06X: ", (unsigned int)(addr + i));
-          printf("%02X ", buf[i]);
-        }
-        printf("\n");
-      } else {
-        printf("Read Failed.\n");
+      if (!buf) {
+        printf("Memory allocation failed.\n");
+        break;
       }
+
+      // Perform the Read
+      // REMOVED: mutex_enter_blocking(&spi_mutex); <-- Caused the hang
+
+      // The function below already handles the locking internally
+      bool success = flash_read_bytes(addr, buf, len);
+
+      // REMOVED: mutex_exit(&spi_mutex);           <-- Caused the hang
+
+      if (success) {
+        printf("\nReading %u bytes from 0x%06X:\n", (unsigned int)len,
+               (unsigned int)addr);
+        print_separator();
+
+        // --- CANONICAL HEX DUMP LOOP ---
+        for (uint32_t i = 0; i < len; i += 16) {
+          // 1. Print Offset (e.g., 0x000010)
+          printf("0x%06X: ", (unsigned int)(addr + i));
+
+          // 2. Print Hex Bytes (Left Side)
+          for (uint32_t j = 0; j < 16; j++) {
+            if (i + j < len) {
+              printf("%02X ", buf[i + j]);
+            } else {
+              printf("   "); // Padding for partial lines
+            }
+          }
+
+          printf("| ");
+
+          // 3. Print ASCII (Right Side)
+          for (uint32_t j = 0; j < 16; j++) {
+            if (i + j < len) {
+              uint8_t c = buf[i + j];
+              // Check if character is printable (ASCII 32-126)
+              printf("%c", (c >= 32 && c <= 126) ? c : '.');
+            }
+          }
+          printf("\n");
+        }
+        print_separator();
+
+      } else {
+        printf("\n✗ Read Failed (SPI Error)\n");
+      }
+
       free(buf);
       printf("\nPress any key...");
       get_menu_choice();
       break;
     }
-
     case '6': {
       // --- WRITE FLASH ---
       clear_screen();
@@ -1195,6 +1237,30 @@ void cli_core(void) {
       } else {
         printf("\nOperation cancelled.\n");
       }
+      printf("\nPress any key...");
+      get_menu_choice();
+      break;
+    }
+      // --- NEW OPTION 8 ---
+    case '8': {
+      clear_screen();
+      print_header("OPCODE FUZZER");
+      printf("\nWARNING: This scans all 256 opcodes (0x00-0xFF).\n");
+      printf("This may trigger undocumented Erase or Lock commands.\n");
+      printf("If the chip hangs, power cycle the device.\n");
+
+      if (confirm_destructive("Start Blind Opcode Scan?")) {
+        // Lock SPI bus so Web/MQTT doesn't interrupt us
+        mutex_enter_blocking(&spi_mutex);
+
+        // Call the function we added to function.c
+        spi_fuzz_scan(SPI_PORT);
+
+        mutex_exit(&spi_mutex);
+      } else {
+        printf("\nScan cancelled.\n");
+      }
+
       printf("\nPress any key...");
       get_menu_choice();
       break;
