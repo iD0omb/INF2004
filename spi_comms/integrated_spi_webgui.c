@@ -1,14 +1,7 @@
-/*
- * SPI Flash Diagnostics with Web GUI & MQTT
- * Integrated version combining SPI diagnostics with web interface
- */
-
-#include "ff.h"
 #include "flash_info.h"
 #include "functions.h"
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
-#include "hw_config.h"
 #include "json.h"
 #include "lwip/apps/mqtt.h"
 #include "lwip/dns.h"
@@ -18,7 +11,10 @@
 #include "pico/multicore.h"
 #include "pico/mutex.h"
 #include "pico/stdlib.h"
+#include "sd_card.h" // Integrated SD abstraction
+#include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h> // Required for malloc
 #include <string.h>
 
 // ========== Configuration ==========
@@ -28,16 +24,24 @@
 #define MQTT_PORT 1883
 #define MQTT_TOPIC "sit/se33/flash/report"
 #define HTTP_PORT 80
-#define JSON_BUFFER_SIZE 8192 // Increased for SPI reports
+#define JSON_BUFFER_SIZE 8192
 #define HTML_BUFFER_SIZE 16384
 #define MAX_HTTP_CONNECTIONS 3
+
+// ========== Flash Commands (Readable) ==========
+#define FLASH_WRITE_ENABLE 0x06
+#define FLASH_READ_STATUS 0x05
+#define FLASH_READ_DATA 0x03
+#define FLASH_PAGE_PROGRAM 0x02
+#define FLASH_SECTOR_ERASE 0x20
+#define FLASH_PAGE_SIZE 256
+#define FLASH_SECTOR_SIZE 4096
 
 // ========== Global Variables ==========
 static mqtt_client_t *mqtt_client;
 static ip_addr_t mqtt_broker_ip;
 static bool mqtt_connected = false;
 static char json_buffer[JSON_BUFFER_SIZE];
-static FATFS fs;
 static bool sd_ready = false;
 static struct tcp_pcb *http_server_pcb;
 static char pico_ip_address[16] = "0.0.0.0";
@@ -58,67 +62,172 @@ static mutex_t sd_mutex;
 static mutex_t spi_mutex;
 static mutex_t buffer_mutex;
 
+// ========== Internal Flash Helpers ==========
+
+// Poll status register until busy bit is cleared
+static bool flash_wait_ready(uint32_t timeout_ms) {
+  uint8_t status;
+  uint8_t cmd = FLASH_READ_STATUS;
+  absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
+
+  do {
+    gpio_put(CS_PIN, 0); // CS Down
+    spi_write_blocking(SPI_PORT, &cmd, 1);
+    spi_read_blocking(SPI_PORT, 0xFF, &status, 1);
+    gpio_put(CS_PIN, 1); // CS Up
+
+    if (!(status & 0x01)) { // Check BUSY bit (Bit 0)
+      return true;
+    }
+    sleep_us(100);
+  } while (!time_reached(deadline));
+
+  return false;
+}
+
+// Send Write Enable Latch command
+static void flash_set_write_enable(void) {
+  uint8_t cmd = FLASH_WRITE_ENABLE;
+  gpio_put(CS_PIN, 0); // CS Down
+  spi_write_blocking(SPI_PORT, &cmd, 1);
+  gpio_put(CS_PIN, 1); // CS Up
+}
+
+// ========== Flash Operations (Public API) ==========
+
+bool flash_read_bytes(uint32_t address, uint8_t *buffer, size_t size) {
+  if (!spi_initialized)
+    return false;
+
+  mutex_enter_blocking(&spi_mutex);
+
+  uint8_t cmd_seq[4];
+  cmd_seq[0] = FLASH_READ_DATA;
+  cmd_seq[1] = (address >> 16) & 0xFF;
+  cmd_seq[2] = (address >> 8) & 0xFF;
+  cmd_seq[3] = address & 0xFF;
+
+  gpio_put(CS_PIN, 0); // CS Down
+  spi_write_blocking(SPI_PORT, cmd_seq, 4);
+  spi_read_blocking(SPI_PORT, 0xFF, buffer, size);
+  gpio_put(CS_PIN, 1); // CS Up
+
+  mutex_exit(&spi_mutex);
+  return true;
+}
+
+bool flash_erase_sector(uint32_t address) {
+  if (!spi_initialized)
+    return false;
+
+  // Safety: Align to sector start
+  address = address & ~(FLASH_SECTOR_SIZE - 1);
+
+  mutex_enter_blocking(&spi_mutex);
+
+  flash_set_write_enable();
+
+  uint8_t cmd_seq[4];
+  cmd_seq[0] = FLASH_SECTOR_ERASE;
+  cmd_seq[1] = (address >> 16) & 0xFF;
+  cmd_seq[2] = (address >> 8) & 0xFF;
+  cmd_seq[3] = address & 0xFF;
+
+  gpio_put(CS_PIN, 0); // CS Down
+  spi_write_blocking(SPI_PORT, cmd_seq, 4);
+  gpio_put(CS_PIN, 1); // CS Up
+
+  // Sector erase can take 50ms to 400ms depending on chip
+  bool result = flash_wait_ready(500);
+
+  mutex_exit(&spi_mutex);
+  return result;
+}
+
+bool flash_program_data(uint32_t addr, const uint8_t *data, size_t len) {
+  if (!spi_initialized)
+    return false;
+
+  mutex_enter_blocking(&spi_mutex);
+
+  uint32_t current_addr = addr;
+  const uint8_t *current_ptr = data;
+  size_t remaining_bytes = len;
+  uint8_t cmd_seq[4];
+
+  while (remaining_bytes > 0) {
+    // Calculate remaining space in current page
+    uint16_t page_offset = current_addr % FLASH_PAGE_SIZE;
+    size_t space_in_page = FLASH_PAGE_SIZE - page_offset;
+    size_t chunk_len =
+        (remaining_bytes < space_in_page) ? remaining_bytes : space_in_page;
+
+    flash_set_write_enable();
+
+    cmd_seq[0] = FLASH_PAGE_PROGRAM;
+    cmd_seq[1] = (current_addr >> 16) & 0xFF;
+    cmd_seq[2] = (current_addr >> 8) & 0xFF;
+    cmd_seq[3] = current_addr & 0xFF;
+
+    gpio_put(CS_PIN, 0); // CS Down
+    spi_write_blocking(SPI_PORT, cmd_seq, 4);
+    spi_write_blocking(SPI_PORT, current_ptr, chunk_len);
+    gpio_put(CS_PIN, 1); // CS Up
+
+    if (!flash_wait_ready(50)) { // Page program usually < 3ms
+      mutex_exit(&spi_mutex);
+      printf("✗ Flash Write Timeout at 0x%06X\n", (unsigned int)current_addr);
+      return false;
+    }
+
+    current_addr += chunk_len;
+    current_ptr += chunk_len;
+    remaining_bytes -= chunk_len;
+  }
+
+  mutex_exit(&spi_mutex);
+  return true;
+}
+
 // ========== SD Card Functions ==========
-bool init_sd_card() {
+bool init_sd_card(void) {
   printf("\n========== SD CARD INITIALIZATION ==========\n");
   mutex_init(&sd_mutex);
 
-  FRESULT fr = f_mount(&fs, "0:", 1);
-  if (fr != FR_OK) {
-    printf("✗ Failed to mount SD card (Error: %d)\n", fr);
+  // Hardware Initialization
+  if (!sd_card_init()) {
+    printf("✗ Failed to initialize SD card hardware\n");
+    return false;
+  }
+
+  // Filesystem Mount
+  if (!sd_mount()) {
+    printf("✗ Failed to mount SD card filesystem\n");
     return false;
   }
 
   printf("✓ SD card mounted successfully!\n");
-
-  // List files
-  DIR dir;
-  FILINFO fno;
-  fr = f_opendir(&dir, "0:/");
-  if (fr == FR_OK) {
-    printf("\n📁 Files on SD card:\n");
-    while (true) {
-      fr = f_readdir(&dir, &fno);
-      if (fr != FR_OK || fno.fname[0] == 0)
-        break;
-      printf("  - %s (%lu bytes)\n", fno.fname, fno.fsize);
-    }
-    f_closedir(&dir);
-  }
-
   return true;
 }
 
 bool write_json_to_sd(const char *filename, const char *data) {
-  if (!sd_ready)
+  if (!sd_ready) {
     return false;
+  }
 
   mutex_enter_blocking(&sd_mutex);
 
-  FIL fil;
-  FRESULT fr;
-  UINT bytes_written = 0;
-  char filepath[64];
+  bool success = sd_write_file(filename, data);
 
-  snprintf(filepath, sizeof(filepath), "0:/%s", filename);
-
-  fr = f_open(&fil, filepath, FA_WRITE | FA_CREATE_ALWAYS);
-  if (fr != FR_OK) {
-    mutex_exit(&sd_mutex);
-    printf("✗ Failed to create file: %s\n", filename);
-    return false;
-  }
-
-  fr = f_write(&fil, data, strlen(data), &bytes_written);
-  f_close(&fil);
   mutex_exit(&sd_mutex);
 
-  if (fr != FR_OK) {
-    printf("✗ Write failed\n");
+  if (!success) {
+    printf("✗ Write failed: %s\n", filename);
     return false;
   }
 
-  printf("✓ Saved to SD: %s (%u bytes)\n", filename, bytes_written);
+  printf("✓ Saved to SD: %s (%u bytes)\n", filename,
+         (unsigned int)strlen(data));
   return true;
 }
 
@@ -130,30 +239,23 @@ bool read_json_from_sd(const char *filename, char *buffer, size_t buffer_size) {
 
   mutex_enter_blocking(&sd_mutex);
 
-  FIL fil;
-  FRESULT fr;
-  UINT bytes_read = 0;
-  char filepath[64];
-
-  snprintf(filepath, sizeof(filepath), "0:/%s", filename);
-
-  fr = f_open(&fil, filepath, FA_READ);
-  if (fr != FR_OK) {
+  // Check existence first
+  if (!sd_file_exists(filename)) {
     mutex_exit(&sd_mutex);
     snprintf(buffer, buffer_size, "{\"error\":\"File not found\"}");
     return false;
   }
 
-  fr = f_read(&fil, buffer, buffer_size - 1, &bytes_read);
-  f_close(&fil);
+  int bytes_read = sd_read_file(filename, buffer, buffer_size);
+
   mutex_exit(&sd_mutex);
 
-  if (fr != FR_OK || bytes_read == 0) {
+  if (bytes_read < 0) {
     snprintf(buffer, buffer_size, "{\"error\":\"Read failed\"}");
     return false;
   }
 
-  buffer[bytes_read] = '\0';
+  // sd_read_file ensures null termination
   return true;
 }
 
@@ -212,8 +314,9 @@ bool run_spi_diagnostic(char *json_out, size_t json_cap) {
 
 // Quick JEDEC ID read
 bool read_jedec_id(uint8_t *mfr, uint8_t *mem_type, uint8_t *capacity) {
-  if (!spi_initialized)
+  if (!spi_initialized) {
     return false;
+  }
 
   mutex_enter_blocking(&spi_mutex);
 
@@ -274,7 +377,7 @@ static void mqtt_dns_found(const char *hostname, const ip_addr_t *ipaddr,
   }
 }
 
-void mqtt_init() {
+void mqtt_init(void) {
   printf("\n--- Initializing MQTT ---\n");
   mqtt_client = mqtt_client_new();
   if (!mqtt_client) {
@@ -290,17 +393,19 @@ void mqtt_init() {
 }
 
 void mqtt_publish_report(const char *json_data) {
-  if (!mqtt_connected || !mqtt_client)
+  if (!mqtt_connected || !mqtt_client) {
     return;
+  }
 
   size_t data_len = strlen(json_data);
-  if (data_len > 4096)
+  if (data_len > 4096) {
     data_len = 4096; // Limit size
+  }
 
   err_t err = mqtt_publish(mqtt_client, MQTT_TOPIC, json_data, data_len, 0, 0,
                            NULL, NULL);
   if (err == ERR_OK) {
-    printf("✓ Published report (%d bytes)\n", data_len);
+    printf("✓ Published report (%d bytes)\n", (int)data_len);
   }
 }
 
@@ -440,13 +545,14 @@ void generate_html_page(char *output, size_t size) {
 }
 
 // Connection management
-void cleanup_old_connections() {
+void cleanup_old_connections(void) {
   uint32_t now = to_ms_since_boot(get_absolute_time());
   for (int i = 0; i < MAX_HTTP_CONNECTIONS; i++) {
     if (http_connections[i].in_use) {
       if (now - http_connections[i].timestamp > 10000) {
-        if (http_connections[i].pcb)
+        if (http_connections[i].pcb) {
           tcp_abort(http_connections[i].pcb);
+        }
         http_connections[i].in_use = false;
       }
     }
@@ -605,8 +711,9 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
 }
 
 static err_t http_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
-  if (err != ERR_OK || newpcb == NULL)
+  if (err != ERR_OK || newpcb == NULL) {
     return ERR_VAL;
+  }
 
   int slot = register_connection(newpcb);
   if (slot < 0) {
@@ -621,7 +728,7 @@ static err_t http_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
   return ERR_OK;
 }
 
-void http_server_init() {
+void http_server_init(void) {
   printf("\n--- Starting HTTP Server ---\n");
 
   memset(http_connections, 0, sizeof(http_connections));
@@ -645,32 +752,67 @@ void http_server_init() {
   printf("✓ HTTP server running on port %d\n", HTTP_PORT);
   printf("🌐 Access at: http://%s\n", pico_ip_address);
 }
+
 // ========== CLI LOOP ==================
 
-// Clear the terminal screen
-void clear_screen() {
-  // ANSI escape code to clear screen and move cursor to home
-  printf("\033[2J\033[H");
-}
+void clear_screen(void) { printf("\033[2J\033[H"); }
 
-// Print a decorative header
 void print_header(const char *title) {
   printf("\n");
   printf("╔════════════════════════════════════════╗\n");
-  printf("║ %-38s ║\n", title); // Centered title
+  printf("║ %-38s ║\n", title);
   printf("╚════════════════════════════════════════╝\n");
 }
 
-// Print a separator line
-void print_separator() {
+void print_separator(void) {
   printf("──────────────────────────────────────────\n");
 }
 
-// Print a section header
 void print_section(const char *section_name) {
   printf("\n┌─ %s\n", section_name);
 }
-// Dynamic report function
+
+// --- CLI Helper functions ---
+void get_input_line(char *buffer, int max_len) {
+  int i = 0;
+  char c;
+  while (i < max_len - 1) {
+    c = getchar();
+    if (c == '\r' || c == '\n') {
+      printf("\n");
+      break;
+    }
+    if (c == '\b' || c == 0x7F) { // Backspace
+      if (i > 0) {
+        printf("\b \b");
+        i--;
+      }
+    } else {
+      printf("%c", c);
+      buffer[i++] = c;
+    }
+  }
+  buffer[i] = '\0';
+}
+
+uint32_t get_hex_input(const char *prompt) {
+  char buf[32];
+  printf("%s", prompt);
+  get_input_line(buf, 32);
+  return (uint32_t)strtoul(buf, NULL, 0); // 0 base handles 0x prefix or decimal
+}
+
+bool confirm_destructive(const char *action) {
+  printf("\n⚠️  WARNING: %s\n", action);
+  printf("This operation is DESTRUCTIVE. Continue? (y/n): ");
+  char c;
+  do {
+    c = getchar();
+  } while (c == '\n' || c == '\r');
+  printf("%c\n", c);
+  return (c == 'y' || c == 'Y');
+}
+
 void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
   clear_screen();
   print_header("FULL CHIP REPORT");
@@ -678,28 +820,24 @@ void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
   size_t offset = 0;
   size_t num_commands = get_safe_command_count();
 
-  // Loop through the command map and print a section for each
   for (size_t i = 0; i < num_commands; i++) {
     const opcode *cmd = get_command_by_index(i);
     if (cmd == NULL)
       continue;
 
-    // Print the section header from the command's description
     char section_title[60];
     snprintf(section_title, sizeof(section_title), "%.60s [Opcode: 0x%02X]",
              cmd->description, cmd->opcode);
     print_section(section_title);
 
-    // If this is the JEDEC ID, decode it specially
     if (cmd->opcode == 0x9F) {
       if (offset + cmd->rx_data_len <= len) {
         uint8_t mfr_id = buf[offset];
         uint8_t mem_type = buf[offset + 1];
         uint8_t capacity = buf[offset + 2];
-        // Fill flash_info
+
         int valid = decode_jedec_id(mfr_id, mem_type, capacity);
 
-        // print JEDEC Section
         if (valid) {
           print_jedec_report(mfr_id, mem_type, capacity);
         } else {
@@ -713,7 +851,6 @@ void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
     } else if (cmd->opcode == 0x5A && cmd->rx_data_len == 24) {
       decode_sfdp_param_headers(&buf[offset]);
     } else {
-      // For all other commands, just print the raw hex data
       printf("│ Data: ");
       for (size_t j = 0; j < cmd->rx_data_len; j++) {
         if (offset + j < len) {
@@ -723,13 +860,15 @@ void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
       printf("\n");
     }
 
-    // Pause every 3 sections to avoid terminal overflow
     if (i > 0 && (i % 3) == 2) {
       printf("\nPress any key to continue...");
-      get_menu_choice();
+      // Using local get_char wrapper not defined, using getchar direct
+      char c;
+      do {
+        c = getchar();
+      } while (c == PICO_ERROR_TIMEOUT);
       clear_screen();
 
-      // Page numbering support
       size_t sections_per_page = 3;
       size_t current_page = (i / sections_per_page) + 1;
       size_t total_pages =
@@ -742,7 +881,6 @@ void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
       print_header(page_title);
     }
 
-    // Advance the offset by this command's payload size
     offset += cmd->rx_data_len;
   }
 
@@ -751,7 +889,6 @@ void print_report_buffer_formatted(const uint8_t *buf, size_t len) {
   print_separator();
 }
 
-// Helper to print individual command results (cleaned up)
 void print_individual_command(const char *name, uint8_t opcode,
                               const uint8_t *rx_buffer, size_t total_len,
                               size_t data_start, size_t data_len) {
@@ -792,7 +929,6 @@ void print_individual_command(const char *name, uint8_t opcode,
   }
   printf("\n");
 
-  // Assessment
   print_section("Assessment");
   printf("│ ");
   if (all_ff) {
@@ -808,8 +944,7 @@ void print_individual_command(const char *name, uint8_t opcode,
   print_separator();
 }
 
-// Helper to get user input from serial (blocking)
-char get_menu_choice() {
+char get_menu_choice(void) {
   char c;
   do {
     c = getchar();
@@ -819,14 +954,13 @@ char get_menu_choice() {
   return c;
 }
 
-// Print the main menu (cleaned up)
-void print_main_menu() {
+void print_main_menu(void) {
   clear_screen();
   printf("\n");
   printf("╔════════════════════════════════════════╗\n");
   printf("║                                        ║\n");
   printf("║           SPI Flash Identifier         ║\n");
-  printf("║                 v1.0                   ║\n");
+  printf("║                 v2.1                   ║\n");
   printf("║                                        ║\n");
   printf("╚════════════════════════════════════════╝\n");
   printf("\n");
@@ -834,11 +968,15 @@ void print_main_menu() {
   printf("  [2] Full Safe Read Report\n");
   printf("  [3] Individual Safe Commands\n");
   printf("  [4] Export Full Safe Report in JSON\n");
+  printf("  --------------------------------\n");
+  printf("  [5] READ Flash (Raw Bytes)\n");
+  printf("  [6] WRITE Flash (Text String)\n");
+  printf("  [7] ERASE Flash (Sector Aligned)\n");
   printf("\n");
   printf("──────────────────────────────────────────\n");
 }
 
-void cli_core() {
+void cli_core(void) {
   sleep_ms(2000);
   printf("\n[CLI] Starting SPI Flash Tool CLI on Core 1...\n");
 
@@ -863,7 +1001,6 @@ void cli_core() {
       const opcode *jedec_cmd = get_command_by_index(0);
 
       int result = spi_ONE_transfer(SPI_PORT, *jedec_cmd, tx_buffer, rx_buffer);
-      gpio_put(CS_PIN, 1);
 
       if (result == 3) {
         printf("Raw JEDEC: %02X %02X %02X\n", rx_buffer[0], rx_buffer[1],
@@ -947,8 +1084,7 @@ void cli_core() {
         break;
       }
 
-      print_individual_command(cmd->description, cmd->opcode, rxb, rx_len,
-                               0, // NO JUNK when using spi_ONE_transfer
+      print_individual_command(cmd->description, cmd->opcode, rxb, rx_len, 0,
                                rx_len);
 
       printf("\nPress any key...");
@@ -980,6 +1116,90 @@ void cli_core() {
       get_menu_choice();
       break;
     }
+
+    case '5': {
+      // --- READ FLASH ---
+      clear_screen();
+      print_header("READ FLASH");
+      uint32_t addr = get_hex_input("Enter Start Address (e.g. 0x0000): ");
+      uint32_t len = get_hex_input("Enter Length (bytes): ");
+
+      if (len > 4096)
+        len = 4096; // Limit display for CLI
+
+      uint8_t *buf = malloc(len);
+      if (flash_read_bytes(addr, buf, len)) {
+        printf("\nData at 0x%06X:\n", (unsigned int)addr);
+        for (uint32_t i = 0; i < len; i++) {
+          if (i % 16 == 0)
+            printf("\n0x%06X: ", (unsigned int)(addr + i));
+          printf("%02X ", buf[i]);
+        }
+        printf("\n");
+      } else {
+        printf("Read Failed.\n");
+      }
+      free(buf);
+      printf("\nPress any key...");
+      get_menu_choice();
+      break;
+    }
+
+    case '6': {
+      // --- WRITE FLASH ---
+      clear_screen();
+      print_header("WRITE FLASH (Text Mode)");
+      uint32_t addr = get_hex_input("Enter Start Address (e.g. 0x0000): ");
+
+      printf("Enter string to write: ");
+      char text_buf[256];
+      get_input_line(text_buf, 256);
+      size_t len = strlen(text_buf);
+
+      if (confirm_destructive(
+              "Writing data will overwrite existing content.")) {
+        if (flash_program_data(addr, (uint8_t *)text_buf, len)) {
+          printf("\n✓ Successfully wrote %zu bytes to 0x%06X\n", len,
+                 (unsigned int)addr);
+        } else {
+          printf("\n✗ Write Failed.\n");
+        }
+      } else {
+        printf("\nOperation cancelled.\n");
+      }
+      printf("\nPress any key...");
+      get_menu_choice();
+      break;
+    }
+
+    case '7': {
+      // --- ERASE SECTOR ---
+      clear_screen();
+      print_header("ERASE SECTOR");
+      uint32_t addr = get_hex_input("Enter Address in Sector (e.g. 0x1000): ");
+
+      // Align display to sector
+      uint32_t sector_start = addr & ~(FLASH_SECTOR_SIZE - 1);
+
+      char msg[64];
+      snprintf(msg, 64, "Erasing 4KB sector at 0x%06X",
+               (unsigned int)sector_start);
+
+      if (confirm_destructive(msg)) {
+        printf("Erasing...");
+        if (flash_erase_sector(sector_start)) {
+          printf("\n✓ Sector Erased Successfully\n");
+        } else {
+          printf("\n✗ Erase Failed.\n");
+        }
+      } else {
+        printf("\nOperation cancelled.\n");
+      }
+      printf("\nPress any key...");
+      get_menu_choice();
+      break;
+    }
+
     default: {
       printf("\nInvalid choice.\n");
       sleep_ms(1000);
@@ -987,15 +1207,16 @@ void cli_core() {
     }
   }
 }
+
 // ========== Main Application ==========
-int main() {
+int main(void) {
   stdio_init_all();
   sleep_ms(3000);
 
   printf("\n");
   printf("╔════════════════════════════════════════╗\n");
-  printf("║  SPI Flash Diagnostic Tool v2.0       ║\n");
-  printf("║  Web GUI + MQTT + SD Card Storage      ║\n");
+  printf("║    SPI Flash Diagnostic Tool v2.1      ║\n");
+  printf("║        Web GUI + MQTT + SD             ║\n");
   printf("╚════════════════════════════════════════╝\n");
   printf("\n");
 
@@ -1051,6 +1272,7 @@ int main() {
   uint32_t last_status = 0;
 
   multicore_launch_core1(cli_core);
+
   while (true) {
     cyw43_arch_poll();
     sleep_ms(10);

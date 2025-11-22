@@ -104,7 +104,7 @@ void spi_master_init(void) {
 
   printf("--- SPI MASTER INITIALIZING ---\n");
 
-  // Initialize SPI - Start conservatively at 1 MHz
+  // Initialize SPI
   spi_init(SPI_PORT, 1000000);
   spi_set_slave(SPI_PORT, false);
 
@@ -155,10 +155,12 @@ int spi_ONE_transfer(spi_inst_t *spi, opcode Opcode, uint8_t *tx_buffer,
   // Send opcode only
   tx_buffer[0] = Opcode.opcode;
   gpio_put(CS_PIN, 0);
+  sleep_us(1);
   spi_write_blocking(spi, tx_buffer, Opcode.tx_len);
-
+  sleep_us(1);
   // Read full response
   spi_read_blocking(spi, 0x00, rx_buffer, Opcode.rx_data_len);
+  sleep_us(1);
   gpio_put(CS_PIN, 1);
 
   return Opcode.rx_data_len;
@@ -200,10 +202,13 @@ int spi_OPSAFE_transfer(spi_inst_t *spi, uint8_t *master_rx_buffer,
 
     // --- Do proper SPI: write THEN read ---
     gpio_put(CS_PIN, 0);
+    sleep_us(1);
     spi_write_blocking(spi, tx, cmd->tx_len);
 
     uint8_t rx[cmd->rx_data_len];
     spi_read_blocking(spi, 0x00, rx, cmd->rx_data_len);
+
+    sleep_us(1);
     gpio_put(CS_PIN, 1);
 
     // --- Store directly (no junk math) ---
