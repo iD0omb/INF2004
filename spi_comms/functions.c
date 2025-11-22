@@ -134,7 +134,7 @@ opcode readDataOp = {
     .rx_data_len = 16, // number of bytes to read back (adjust as needed)
     .description = "Read Data"
 };
-           
+
 // Calculate number of destructive commands
 static const size_t num_destructive_commands = sizeof(desOps) / sizeof(desOps[0]);
 

@@ -485,7 +485,7 @@ int main() {
             .rx_data_len = 16,
             .description = "Read Data"
         };
- 
+
         tx[0] = readDataOp.opcode;
         tx[1] = (address >> 16) & 0xFF;
         tx[2] = (address >> 8) & 0xFF;
