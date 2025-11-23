@@ -6,11 +6,13 @@
 #include "diskio.h"
 #include "ff.h"
 #include "pico/stdlib.h"
+#include "pico/mutex.h"
 #include <stdio.h>
 #include <string.h>
 
 static FATFS fatfs;
 static bool sd_mounted = false;
+static mutex_t sd_mutex;
 
 // Helper function to create directory if it doesn't exist
 static bool ensure_directory_exists(const char *path) {
@@ -26,6 +28,31 @@ static bool ensure_directory_exists(const char *path) {
   // For now, we'll just log that we tried
   printf("# Note: Directory %s may need to be created\n", path);
   return true; // Assume it's okay
+}
+
+// Wrapper to Init Hardware, Mount, and Mutex
+bool sd_full_init(void) {
+    printf("\n========== SD CARD INITIALIZATION ==========\n");
+    mutex_init(&sd_mutex);
+
+    // Hardware Initialization
+    if (!sd_card_init()) {
+        printf("✗ Failed to initialize SD card hardware\n");
+        return false;
+    }
+
+    // Filesystem Mount
+    if (!sd_mount()) {
+        printf("✗ Failed to mount SD card filesystem\n");
+        return false;
+    }
+
+    printf("✓ SD card mounted successfully!\n");
+    return true;
+}
+
+bool sd_is_mounted(void) {
+    return sd_mounted;
 }
 
 bool sd_card_init(void) {
@@ -156,4 +183,47 @@ int sd_read_file(const char *filename, char *buffer, size_t buffer_size) {
 
   buffer[bytes_read] = '\0';
   return (int)bytes_read;
+}
+
+// ========== THREAD SAFE WRAPPERS ==========
+
+bool sd_write_safe(const char *filename, const char *data) {
+    if (!sd_mounted) return false;
+
+    mutex_enter_blocking(&sd_mutex);
+    bool success = sd_write_file(filename, data);
+    mutex_exit(&sd_mutex);
+
+    if (!success) {
+        printf("✗ Write failed: %s\n", filename);
+        return false;
+    }
+    
+    // Optional: Keep your nice print format
+    printf("✓ Saved to SD: %s (%u bytes)\n", filename, (unsigned int)strlen(data));
+    return true;
+}
+
+bool sd_read_safe(const char *filename, char *buffer, size_t buffer_size) {
+    if (!sd_mounted) {
+        snprintf(buffer, buffer_size, "{\"error\":\"SD card not ready\"}");
+        return false;
+    }
+
+    mutex_enter_blocking(&sd_mutex);
+
+    if (!sd_file_exists(filename)) {
+        mutex_exit(&sd_mutex);
+        snprintf(buffer, buffer_size, "{\"error\":\"File not found\"}");
+        return false;
+    }
+
+    int bytes_read = sd_read_file(filename, buffer, buffer_size);
+    mutex_exit(&sd_mutex);
+
+    if (bytes_read < 0) {
+        snprintf(buffer, buffer_size, "{\"error\":\"Read failed\"}");
+        return false;
+    }
+    return true;
 }

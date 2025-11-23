@@ -32,9 +32,9 @@ static mqtt_client_t *mqtt_client;
 static ip_addr_t mqtt_broker_ip;
 static bool mqtt_connected = false;
 static char json_buffer[JSON_BUFFER_SIZE];
-static bool sd_ready = false;
 static struct tcp_pcb *http_server_pcb;
 static char pico_ip_address[16] = "0.0.0.0";
+static bool sd_ready = false;
 
 // SPI state
 static bool spi_initialized = false;
@@ -48,7 +48,6 @@ typedef struct http_connection {
 } http_connection_t;
 
 static http_connection_t http_connections[MAX_HTTP_CONNECTIONS];
-static mutex_t sd_mutex;
 static mutex_t spi_mutex;
 static mutex_t buffer_mutex;
 
@@ -176,76 +175,6 @@ bool flash_program_data(uint32_t addr, const uint8_t *data, size_t len) {
   }
 
   mutex_exit(&spi_mutex);
-  return true;
-}
-
-// ========== SD Card Functions ==========
-bool init_sd_card(void) {
-  printf("\n========== SD CARD INITIALIZATION ==========\n");
-  mutex_init(&sd_mutex);
-
-  // Hardware Initialization
-  if (!sd_card_init()) {
-    printf("✗ Failed to initialize SD card hardware\n");
-    return false;
-  }
-
-  // Filesystem Mount
-  if (!sd_mount()) {
-    printf("✗ Failed to mount SD card filesystem\n");
-    return false;
-  }
-
-  printf("✓ SD card mounted successfully!\n");
-  return true;
-}
-
-bool write_json_to_sd(const char *filename, const char *data) {
-  if (!sd_ready) {
-    return false;
-  }
-
-  mutex_enter_blocking(&sd_mutex);
-
-  bool success = sd_write_file(filename, data);
-
-  mutex_exit(&sd_mutex);
-
-  if (!success) {
-    printf("✗ Write failed: %s\n", filename);
-    return false;
-  }
-
-  printf("✓ Saved to SD: %s (%u bytes)\n", filename,
-         (unsigned int)strlen(data));
-  return true;
-}
-
-bool read_json_from_sd(const char *filename, char *buffer, size_t buffer_size) {
-  if (!sd_ready) {
-    snprintf(buffer, buffer_size, "{\"error\":\"SD card not ready\"}");
-    return false;
-  }
-
-  mutex_enter_blocking(&sd_mutex);
-
-  // Check existence first
-  if (!sd_file_exists(filename)) {
-    mutex_exit(&sd_mutex);
-    snprintf(buffer, buffer_size, "{\"error\":\"File not found\"}");
-    return false;
-  }
-
-  int bytes_read = sd_read_file(filename, buffer, buffer_size);
-
-  mutex_exit(&sd_mutex);
-
-  if (bytes_read < 0) {
-    snprintf(buffer, buffer_size, "{\"error\":\"Read failed\"}");
-    return false;
-  }
-
-  // sd_read_file ensures null termination
   return true;
 }
 
@@ -625,7 +554,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
     bool success = run_spi_diagnostic(json_buffer, JSON_BUFFER_SIZE);
 
     if (success && sd_ready) {
-      write_json_to_sd("latest.json", json_buffer);
+     sd_write_safe("latest.json", json_buffer);
     }
 
     snprintf(response, HTML_BUFFER_SIZE,
@@ -638,8 +567,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
   } else if (strstr(request, "GET /api/download")) {
     // Download latest report
     mutex_enter_blocking(&buffer_mutex);
-    read_json_from_sd("latest.json", json_buffer, JSON_BUFFER_SIZE);
-
+    sd_read_safe("latest.json", json_buffer, JSON_BUFFER_SIZE);
     snprintf(response, HTML_BUFFER_SIZE,
              "HTTP/1.1 200 OK\r\n"
              "Content-Type: application/json\r\n"
@@ -654,7 +582,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
     // Publish via MQTT
     if (mqtt_connected) {
       mutex_enter_blocking(&buffer_mutex);
-      read_json_from_sd("latest.json", json_buffer, JSON_BUFFER_SIZE);
+      sd_read_safe("latest.json", json_buffer, JSON_BUFFER_SIZE);
       mqtt_publish_report(json_buffer);
       mutex_exit(&buffer_mutex);
 
@@ -678,7 +606,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
         *space = '\0';
 
       mutex_enter_blocking(&buffer_mutex);
-      read_json_from_sd(file_param, json_buffer, JSON_BUFFER_SIZE);
+      sd_read_safe(file_param, json_buffer, JSON_BUFFER_SIZE);
       mutex_exit(&buffer_mutex);
 
       snprintf(response, HTML_BUFFER_SIZE,
@@ -1282,10 +1210,10 @@ int main(void) {
   printf("✓ SPI initialized\n");
 
   // Initialize SD Card
-  sd_ready = init_sd_card();
-  if (!sd_ready) {
-    printf("⚠️  Running without SD card\n");
-  }
+sd_ready = sd_full_init(); // Calls the new wrapper in sd_card.c
+    if (!sd_ready) {
+        printf("⚠️  Running without SD card\n");
+    }
 
   // Initialize WiFi
   printf("\n--- Initializing WiFi ---\n");
