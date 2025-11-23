@@ -24,9 +24,6 @@
 #include <stdio.h>
 #include <string.h>
 
-// ========== Global Variable Definitions ==========
-// These are declared 'extern' in globals.h
-
 char json_buffer[JSON_BUFFER_SIZE];
 char pico_ip_address[16] = "0.0.0.0";
 bool sd_ready = false;

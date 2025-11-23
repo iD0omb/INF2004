@@ -15,7 +15,7 @@ bool sd_is_mounted(void);
 bool sd_write_safe(const char *filename, const char *data);
 bool sd_read_safe(const char *filename, char *buffer, size_t buffer_size);
 
-// --- Lower level functions (Internal use, but exposed if needed) ---
+// --- Lower level functions ---
 bool sd_card_init(void);
 bool sd_mount(void);
 bool sd_file_exists(const char *filename);

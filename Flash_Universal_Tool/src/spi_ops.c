@@ -99,7 +99,7 @@ const char *decode_opcode_name(uint8_t op) {
   case 0x0B:
     return "Fast Read";
 
-  // --- Dual / Quad Reads (The "Hidden" ones you found) ---
+  // --- Dual / Quad Reads ---
   case 0x3B:
     return "Fast Read Dual Output";
   case 0x3D:

@@ -25,7 +25,6 @@ static bool ensure_directory_exists(const char *path) {
   }
 
   // Try to create directory (note: f_mkdir not in our minimal FatFs)
-  // For now, we'll just log that we tried
   printf("# Note: Directory %s may need to be created\n", path);
   return true; // Assume it's okay
 }
@@ -155,7 +154,6 @@ void sd_unmount(void) {
 int sd_list_json_files(const char *directory, char filenames[][64],
                        int max_files) {
   // Simplified implementation - would need f_opendir/f_readdir for full
-  // implementation For now, return 0 (no files found)
   return 0;
 }
 
