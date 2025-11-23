@@ -1,5 +1,6 @@
 #include "flash_info.h"
-#include "functions.h"
+#include "config.h"
+#include "spi_ops.h"
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
 #include "json.h"
@@ -16,17 +17,6 @@
 #include <stdio.h>
 #include <stdlib.h> // Required for malloc
 #include <string.h>
-
-// ========== Configuration ==========
-#define WIFI_SSID "Doomb"
-#define WIFI_PASSWORD "Hotspot@Zephyrus"
-#define MQTT_BROKER "broker.hivemq.com"
-#define MQTT_PORT 1883
-#define MQTT_TOPIC "sit/se33/flash/report"
-#define HTTP_PORT 80
-#define JSON_BUFFER_SIZE 8192
-#define HTML_BUFFER_SIZE 16384
-#define MAX_HTTP_CONNECTIONS 3
 
 // ========== Flash Commands (Readable) ==========
 #define FLASH_WRITE_ENABLE 0x06
@@ -93,7 +83,7 @@ static void flash_set_write_enable(void) {
   gpio_put(CS_PIN, 1); // CS Up
 }
 
-// ========== Flash Operations (Public API) ==========
+// ========== Flash Operations==========
 
 bool flash_read_bytes(uint32_t address, uint8_t *buffer, size_t size) {
   if (!spi_initialized)
@@ -1142,8 +1132,6 @@ void cli_core(void) {
 
       // The function below already handles the locking internally
       bool success = flash_read_bytes(addr, buf, len);
-
-      // REMOVED: mutex_exit(&spi_mutex);           <-- Caused the hang
 
       if (success) {
         printf("\nReading %u bytes from 0x%06X:\n", (unsigned int)len,

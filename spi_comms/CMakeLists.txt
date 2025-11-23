@@ -1,7 +1,23 @@
+# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
+if(WIN32)
+    set(USERHOME $ENV{USERPROFILE})
+else()
+    set(USERHOME $ENV{HOME})
+endif()
+set(sdkVersion 2.2.0)
+set(toolchainVersion 14_2_Rel1)
+set(picotoolVersion 2.2.0-a4)
+set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
+if (EXISTS ${picoVscode})
+    include(${picoVscode})
+endif()
+# ====================================================================================
+set(PICO_BOARD pico_w CACHE STRING "Board type")
+
 cmake_minimum_required(VERSION 3.13)
 
 # 1. Initialize SDK
-include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
+include(pico_sdk_import.cmake)
 
 # This name can be anything. It does not need to be "spi_comms".
 project(main C CXX ASM)
@@ -18,7 +34,7 @@ pico_sdk_init()
 # The first word here becomes your output filename (spi_flash_webgui.uf2)
 add_executable(main
     main.c 
-    functions.c 
+    spi_ops.c 
     json.c    
     flash_db.c
     sd_card.c

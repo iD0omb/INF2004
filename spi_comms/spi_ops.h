@@ -1,5 +1,5 @@
-#ifndef FUNCTIONS_H
-#define FUNCTIONS_H
+#ifndef SPI_OPS_H
+#define SPI_OPS_H
 
 #include "flash_info.h"
 #include <hardware/spi.h>

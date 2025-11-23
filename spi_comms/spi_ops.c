@@ -1,4 +1,4 @@
-#include "functions.h"
+#include "spi_ops.h"
 #include "flash_db.h"
 #include "flash_info.h"
 #include "hardware/gpio.h"
