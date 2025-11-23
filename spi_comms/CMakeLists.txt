@@ -38,6 +38,7 @@ add_executable(main
     json.c    
     flash_db.c
     sd_card.c
+    mqtt.c
     fatfs/ff.c
     fatfs/diskio.c
     fatfs/ffsystem.c

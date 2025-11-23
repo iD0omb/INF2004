@@ -1,10 +1,10 @@
 #include "flash_info.h"
 #include "config.h"
 #include "spi_ops.h"
+#include "mqtt.h" 
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
 #include "json.h"
-#include "lwip/apps/mqtt.h"
 #include "lwip/dns.h"
 #include "lwip/pbuf.h"
 #include "lwip/tcp.h"
@@ -12,10 +12,10 @@
 #include "pico/multicore.h"
 #include "pico/mutex.h"
 #include "pico/stdlib.h"
-#include "sd_card.h" // Integrated SD abstraction
+#include "sd_card.h" 
 #include <ctype.h>
 #include <stdio.h>
-#include <stdlib.h> // Required for malloc
+#include <stdlib.h> 
 #include <string.h>
 
 // ========== Flash Commands (Readable) ==========
@@ -28,9 +28,7 @@
 #define FLASH_SECTOR_SIZE 4096
 
 // ========== Global Variables ==========
-static mqtt_client_t *mqtt_client;
-static ip_addr_t mqtt_broker_ip;
-static bool mqtt_connected = false;
+
 static char json_buffer[JSON_BUFFER_SIZE];
 static struct tcp_pcb *http_server_pcb;
 static char pico_ip_address[16] = "0.0.0.0";
@@ -268,65 +266,6 @@ bool read_jedec_id(uint8_t *mfr, uint8_t *mem_type, uint8_t *capacity) {
   return false;
 }
 
-// ========== MQTT Functions ==========
-static void mqtt_connection_cb(mqtt_client_t *client, void *arg,
-                               mqtt_connection_status_t status) {
-  if (status == MQTT_CONNECT_ACCEPTED) {
-    printf("✓ MQTT Connected!\n");
-    mqtt_connected = true;
-  } else {
-    printf("✗ MQTT connection failed\n");
-    mqtt_connected = false;
-  }
-}
-
-static void mqtt_dns_found(const char *hostname, const ip_addr_t *ipaddr,
-                           void *arg) {
-  if (ipaddr != NULL) {
-    mqtt_broker_ip = *ipaddr;
-    printf("✓ DNS resolved %s\n", hostname);
-
-    struct mqtt_connect_client_info_t ci;
-    memset(&ci, 0, sizeof(ci));
-    ci.client_id = "pico_spi_flash_tool";
-    ci.keep_alive = 60;
-
-    mqtt_client_connect(mqtt_client, &mqtt_broker_ip, MQTT_PORT,
-                        mqtt_connection_cb, NULL, &ci);
-  }
-}
-
-void mqtt_init(void) {
-  printf("\n--- Initializing MQTT ---\n");
-  mqtt_client = mqtt_client_new();
-  if (!mqtt_client) {
-    printf("✗ Failed to create MQTT client\n");
-    return;
-  }
-
-  err_t err =
-      dns_gethostbyname(MQTT_BROKER, &mqtt_broker_ip, mqtt_dns_found, NULL);
-  if (err == ERR_OK) {
-    mqtt_dns_found(MQTT_BROKER, &mqtt_broker_ip, NULL);
-  }
-}
-
-void mqtt_publish_report(const char *json_data) {
-  if (!mqtt_connected || !mqtt_client) {
-    return;
-  }
-
-  size_t data_len = strlen(json_data);
-  if (data_len > 4096) {
-    data_len = 4096; // Limit size
-  }
-
-  err_t err = mqtt_publish(mqtt_client, MQTT_TOPIC, json_data, data_len, 0, 0,
-                           NULL, NULL);
-  if (err == ERR_OK) {
-    printf("✓ Published report (%d bytes)\n", (int)data_len);
-  }
-}
 
 // ========== HTTP Web Server Functions ==========
 
@@ -459,8 +398,8 @@ void generate_html_page(char *output, size_t size) {
       "</body>\n"
       "</html>",
       pico_ip_address, spi_initialized ? "Ready" : "Not Init",
-      sd_ready ? "Ready" : "No Card", mqtt_connected ? "Connected" : "Offline",
-      chip_info, mqtt_connected ? "" : "disabled");
+      sd_ready ? "Ready" : "No Card", mqtt_is_connected() ? "Connected" : "Offline", // UPDATED HERE
+      chip_info, mqtt_is_connected() ? "" : "disabled"); // UPDATED HERE
 }
 
 // Connection management
@@ -580,10 +519,14 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
 
   } else if (strstr(request, "GET /api/publish")) {
     // Publish via MQTT
-    if (mqtt_connected) {
+    // CHANGED: Use new API check
+    if (mqtt_is_connected()) { 
       mutex_enter_blocking(&buffer_mutex);
       sd_read_safe("latest.json", json_buffer, JSON_BUFFER_SIZE);
-      mqtt_publish_report(json_buffer);
+      
+      // CHANGED: Use new API publish
+      mqtt_publish_report(json_buffer); 
+      
       mutex_exit(&buffer_mutex);
 
       snprintf(response, HTML_BUFFER_SIZE,
@@ -878,7 +821,7 @@ void print_main_menu(void) {
   printf("╔════════════════════════════════════════╗\n");
   printf("║                                        ║\n");
   printf("║           SPI Flash Identifier         ║\n");
-  printf("║                 v2.1                   ║\n");
+  printf("║                v2.1                    ║\n");
   printf("║                                        ║\n");
   printf("╚════════════════════════════════════════╝\n");
   printf("\n");
@@ -1210,10 +1153,10 @@ int main(void) {
   printf("✓ SPI initialized\n");
 
   // Initialize SD Card
-sd_ready = sd_full_init(); // Calls the new wrapper in sd_card.c
-    if (!sd_ready) {
-        printf("⚠️  Running without SD card\n");
-    }
+  sd_ready = sd_full_init(); // Calls the new wrapper in sd_card.c
+  if (!sd_ready) {
+    printf("⚠️  Running without SD card\n");
+  }
 
   // Initialize WiFi
   printf("\n--- Initializing WiFi ---\n");
@@ -1236,8 +1179,8 @@ sd_ready = sd_full_init(); // Calls the new wrapper in sd_card.c
   strncpy(pico_ip_address, ip, sizeof(pico_ip_address) - 1);
   printf("✓ IP: %s\n", pico_ip_address);
 
-  // Initialize MQTT
-  mqtt_init();
+  // Initialize MQTT - CHANGED: Call the function from mqtt_ops.c
+  mqtt_init(); 
 
   // Start HTTP server
   http_server_init();
@@ -1246,7 +1189,8 @@ sd_ready = sd_full_init(); // Calls the new wrapper in sd_card.c
   printf("✅ SPI: Ready\n");
   printf("✅ WiFi: %s\n", pico_ip_address);
   printf("✅ Web GUI: http://%s\n", pico_ip_address);
-  printf("✅ MQTT: %s\n", mqtt_connected ? "Connected" : "Initializing");
+  // CHANGED: Use accessor
+  printf("✅ MQTT: %s\n", mqtt_is_connected() ? "Connected" : "Initializing"); 
   printf("✅ SD Card: %s\n", sd_ready ? "Ready" : "Not available");
   printf("==================================\n\n");
 
@@ -1266,7 +1210,8 @@ sd_ready = sd_full_init(); // Calls the new wrapper in sd_card.c
       printf("\n--- System Status ---\n");
       printf("Uptime: %lu seconds\n", now / 1000);
       printf("WiFi: %s\n", pico_ip_address);
-      printf("MQTT: %s\n", mqtt_connected ? "Connected" : "Disconnected");
+      // CHANGED: Use accessor
+      printf("MQTT: %s\n", mqtt_is_connected() ? "Connected" : "Disconnected"); 
       printf("Last JEDEC: %02X %02X %02X\n", last_jedec_id[0], last_jedec_id[1],
              last_jedec_id[2]);
       last_status = now;
