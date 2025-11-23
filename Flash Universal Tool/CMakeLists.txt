@@ -41,6 +41,9 @@ add_executable(main
     src/sd_card.c
     src/web_server.c
     src/mqtt.c
+    src/flash_ops.c
+    src/spi_diag.c
+    src/cli.c
     lib/fatfs/ff.c
     lib/fatfs/diskio.c
     lib/fatfs/ffsystem.c

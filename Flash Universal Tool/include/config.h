@@ -1,5 +1,5 @@
-#ifndef CONFIG.H
-#define CONFIG.H
+#ifndef CONFIG_H
+#define CONFIG_H
 
 // ========== Configuration ==========
 #define WIFI_SSID "Doomb"
@@ -11,5 +11,6 @@
 #define JSON_BUFFER_SIZE 8192
 #define HTML_BUFFER_SIZE 16384
 #define MAX_HTTP_CONNECTIONS 3
+
 
 #endif
