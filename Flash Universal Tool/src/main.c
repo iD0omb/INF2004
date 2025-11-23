@@ -17,7 +17,8 @@
 #include <stdio.h>
 #include <stdlib.h> 
 #include <string.h>
-
+#include "web_server.h"
+#include "web_server.h"
 // ========== Flash Commands (Readable) ==========
 #define FLASH_WRITE_ENABLE 0x06
 #define FLASH_READ_STATUS 0x05
@@ -29,25 +30,17 @@
 
 // ========== Global Variables ==========
 
-static char json_buffer[JSON_BUFFER_SIZE];
-static struct tcp_pcb *http_server_pcb;
-static char pico_ip_address[16] = "0.0.0.0";
-static bool sd_ready = false;
+char json_buffer[JSON_BUFFER_SIZE];
+struct tcp_pcb *http_server_pcb;
+char pico_ip_address[16] = "0.0.0.0";
+bool sd_ready = false;
 
 // SPI state
-static bool spi_initialized = false;
-static uint8_t last_jedec_id[3] = {0xFF, 0xFF, 0xFF};
+bool spi_initialized = false;
+uint8_t last_jedec_id[3] = {0xFF, 0xFF, 0xFF};
 
-// Connection tracking
-typedef struct http_connection {
-  struct tcp_pcb *pcb;
-  bool in_use;
-  uint32_t timestamp;
-} http_connection_t;
-
-static http_connection_t http_connections[MAX_HTTP_CONNECTIONS];
-static mutex_t spi_mutex;
-static mutex_t buffer_mutex;
+mutex_t spi_mutex;
+mutex_t buffer_mutex;
 
 // ========== Internal Flash Helpers ==========
 
@@ -264,354 +257,6 @@ bool read_jedec_id(uint8_t *mfr, uint8_t *mem_type, uint8_t *capacity) {
   }
 
   return false;
-}
-
-
-// ========== HTTP Web Server Functions ==========
-
-void generate_html_page(char *output, size_t size) {
-  // Get chip info
-  char chip_info[128] = "Not scanned";
-  if (last_jedec_id[0] != 0xFF) {
-    snprintf(chip_info, sizeof(chip_info),
-             "MFR: 0x%02X | Type: 0x%02X | Cap: 0x%02X", last_jedec_id[0],
-             last_jedec_id[1], last_jedec_id[2]);
-  }
-
-  snprintf(
-      output, size,
-      "HTTP/1.1 200 OK\r\n"
-      "Content-Type: text/html\r\n"
-      "Connection: close\r\n\r\n"
-      "<!DOCTYPE html>\n"
-      "<html>\n"
-      "<head>\n"
-      "  <meta charset='utf-8'>\n"
-      "  <meta name='viewport' content='width=device-width, initial-scale=1'>\n"
-      "  <title>SPI Flash Diagnostics</title>\n"
-      "  <style>\n"
-      "    * { margin: 0; padding: 0; box-sizing: border-box; }\n"
-      "    body { font-family: system-ui, sans-serif; background: #0f172a; "
-      "color: #e2e8f0; padding: 20px; }\n"
-      "    .container { max-width: 1000px; margin: 0 auto; }\n"
-      "    .header { background: linear-gradient(135deg, #3b82f6 0%%, #8b5cf6 "
-      "100%%); padding: 30px; border-radius: 12px; margin-bottom: 20px; }\n"
-      "    h1 { font-size: 28px; margin-bottom: 10px; }\n"
-      "    .status { font-size: 14px; opacity: 0.9; }\n"
-      "    .card { background: #1e293b; padding: 25px; border-radius: 12px; "
-      "margin-bottom: 20px; }\n"
-      "    .card h2 { color: #60a5fa; margin-bottom: 15px; }\n"
-      "    .btn { padding: 12px 24px; background: #3b82f6; color: white; "
-      "border: none; border-radius: 8px; cursor: pointer; font-size: 14px; "
-      "font-weight: 500; }\n"
-      "    .btn:hover { background: #2563eb; }\n"
-      "    .btn:disabled { background: #475569; cursor: not-allowed; }\n"
-      "    .btn-group { display: flex; gap: 10px; flex-wrap: wrap; }\n"
-      "    pre { background: #0f172a; padding: 20px; border-radius: 8px; "
-      "overflow-x: auto; font-size: 12px; max-height: 500px; overflow-y: auto; "
-      "}\n"
-      "    .info { color: #94a3b8; font-size: 14px; margin-top: 10px; }\n"
-      "    .loading { display: none; color: #60a5fa; }\n"
-      "    .loading.active { display: inline; }\n"
-      "  </style>\n"
-      "</head>\n"
-      "<body>\n"
-      "  <div class='container'>\n"
-      "    <div class='header'>\n"
-      "      <h1>🔧 SPI Flash Diagnostic Tool</h1>\n"
-      "      <div class='status'>IP: %s | SPI: %s | SD: %s | MQTT: %s</div>\n"
-      "    </div>\n"
-      "    <div class='card'>\n"
-      "      <h2>📡 Quick Identification</h2>\n"
-      "      <div class='btn-group'>\n"
-      "        <button class='btn' onclick='scanJedec()'>Read JEDEC "
-      "ID</button>\n"
-      "        <span class='loading' id='jedecLoading'>Reading...</span>\n"
-      "      </div>\n"
-      "      <div class='info' id='jedecInfo'>%s</div>\n"
-      "    </div>\n"
-      "    <div class='card'>\n"
-      "      <h2>📊 Full Diagnostic Report</h2>\n"
-      "      <div class='btn-group'>\n"
-      "        <button class='btn' onclick='runFullScan()'>Run Full "
-      "Scan</button>\n"
-      "        <button class='btn' onclick='downloadReport()'>Download "
-      "JSON</button>\n"
-      "        <button class='btn' onclick='publishMqtt()' %s>Publish via "
-      "MQTT</button>\n"
-      "        <span class='loading' id='scanLoading'>Scanning...</span>\n"
-      "      </div>\n"
-      "      <pre id='reportData'>Click \"Run Full Scan\" to begin...</pre>\n"
-      "    </div>\n"
-      "    <div class='card'>\n"
-      "      <h2>📁 Saved Reports</h2>\n"
-      "      <div class='btn-group'>\n"
-      "        <button class='btn' onclick='viewReport(\"latest.json\")'>View "
-      "Latest</button>\n"
-      "        <button class='btn' onclick='viewReport(\"report.json\")'>View "
-      "report.json</button>\n"
-      "      </div>\n"
-      "      <div class='info'>Reports are automatically saved to SD "
-      "card</div>\n"
-      "    </div>\n"
-      "  </div>\n"
-      "  <script>\n"
-      "    async function scanJedec() {\n"
-      "      document.getElementById('jedecLoading').classList.add('active');\n"
-      "      const resp = await fetch('/api/jedec');\n"
-      "      const data = await resp.json();\n"
-      "      "
-      "document.getElementById('jedecLoading').classList.remove('active');\n"
-      "      if (data.error) {\n"
-      "        document.getElementById('jedecInfo').textContent = 'Error: ' + "
-      "data.error;\n"
-      "      } else {\n"
-      "        document.getElementById('jedecInfo').textContent = \n"
-      "          `Manufacturer: 0x${data.manufacturer} | Memory Type: "
-      "0x${data.memory_type} | Capacity: 0x${data.capacity}`;\n"
-      "      }\n"
-      "    }\n"
-      "    async function runFullScan() {\n"
-      "      document.getElementById('scanLoading').classList.add('active');\n"
-      "      document.getElementById('reportData').textContent = 'Scanning "
-      "flash memory...';\n"
-      "      const resp = await fetch('/api/scan');\n"
-      "      const data = await resp.text();\n"
-      "      "
-      "document.getElementById('scanLoading').classList.remove('active');\n"
-      "      document.getElementById('reportData').textContent = data;\n"
-      "    }\n"
-      "    async function downloadReport() {\n"
-      "      window.location.href = '/api/download';\n"
-      "    }\n"
-      "    async function publishMqtt() {\n"
-      "      const resp = await fetch('/api/publish');\n"
-      "      const data = await resp.json();\n"
-      "      alert(data.message || data.error);\n"
-      "    }\n"
-      "    async function viewReport(filename) {\n"
-      "      const resp = await fetch(`/api/view?file=${filename}`);\n"
-      "      const data = await resp.text();\n"
-      "      document.getElementById('reportData').textContent = data;\n"
-      "    }\n"
-      "  </script>\n"
-      "</body>\n"
-      "</html>",
-      pico_ip_address, spi_initialized ? "Ready" : "Not Init",
-      sd_ready ? "Ready" : "No Card", mqtt_is_connected() ? "Connected" : "Offline", // UPDATED HERE
-      chip_info, mqtt_is_connected() ? "" : "disabled"); // UPDATED HERE
-}
-
-// Connection management
-void cleanup_old_connections(void) {
-  uint32_t now = to_ms_since_boot(get_absolute_time());
-  for (int i = 0; i < MAX_HTTP_CONNECTIONS; i++) {
-    if (http_connections[i].in_use) {
-      if (now - http_connections[i].timestamp > 10000) {
-        if (http_connections[i].pcb) {
-          tcp_abort(http_connections[i].pcb);
-        }
-        http_connections[i].in_use = false;
-      }
-    }
-  }
-}
-
-int register_connection(struct tcp_pcb *pcb) {
-  cleanup_old_connections();
-  for (int i = 0; i < MAX_HTTP_CONNECTIONS; i++) {
-    if (!http_connections[i].in_use) {
-      http_connections[i].pcb = pcb;
-      http_connections[i].in_use = true;
-      http_connections[i].timestamp = to_ms_since_boot(get_absolute_time());
-      return i;
-    }
-  }
-  return -1;
-}
-
-void unregister_connection(struct tcp_pcb *pcb) {
-  for (int i = 0; i < MAX_HTTP_CONNECTIONS; i++) {
-    if (http_connections[i].pcb == pcb) {
-      http_connections[i].in_use = false;
-      http_connections[i].pcb = NULL;
-      break;
-    }
-  }
-}
-
-// HTTP request handler
-static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
-                       err_t err) {
-  if (p == NULL) {
-    unregister_connection(pcb);
-    tcp_close(pcb);
-    return ERR_OK;
-  }
-
-  char *request = malloc(p->tot_len + 1);
-  char *response = malloc(HTML_BUFFER_SIZE);
-
-  if (!request || !response) {
-    if (request)
-      free(request);
-    if (response)
-      free(response);
-    pbuf_free(p);
-    tcp_abort(pcb);
-    return ERR_ABRT;
-  }
-
-  pbuf_copy_partial(p, request, p->tot_len, 0);
-  request[p->tot_len] = '\0';
-
-  // Route handling
-  if (strstr(request, "GET / ") || strstr(request, "GET /index")) {
-    // Serve main page
-    generate_html_page(response, HTML_BUFFER_SIZE);
-    tcp_write(pcb, response, strlen(response), TCP_WRITE_FLAG_COPY);
-
-  } else if (strstr(request, "GET /api/jedec")) {
-    // Quick JEDEC ID read
-    uint8_t mfr, mem_type, capacity;
-    if (read_jedec_id(&mfr, &mem_type, &capacity)) {
-      snprintf(response, HTML_BUFFER_SIZE,
-               "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"
-               "{\"manufacturer\":\"%02X\",\"memory_type\":\"%02X\","
-               "\"capacity\":\"%02X\"}",
-               mfr, mem_type, capacity);
-    } else {
-      snprintf(response, HTML_BUFFER_SIZE,
-               "HTTP/1.1 500 OK\r\nContent-Type: application/json\r\n\r\n"
-               "{\"error\":\"Failed to read JEDEC ID\"}");
-    }
-    tcp_write(pcb, response, strlen(response), TCP_WRITE_FLAG_COPY);
-
-  } else if (strstr(request, "GET /api/scan")) {
-    // Run full diagnostic
-    mutex_enter_blocking(&buffer_mutex);
-    bool success = run_spi_diagnostic(json_buffer, JSON_BUFFER_SIZE);
-
-    if (success && sd_ready) {
-     sd_write_safe("latest.json", json_buffer);
-    }
-
-    snprintf(response, HTML_BUFFER_SIZE,
-             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n%s",
-             json_buffer);
-    mutex_exit(&buffer_mutex);
-
-    tcp_write(pcb, response, strlen(response), TCP_WRITE_FLAG_COPY);
-
-  } else if (strstr(request, "GET /api/download")) {
-    // Download latest report
-    mutex_enter_blocking(&buffer_mutex);
-    sd_read_safe("latest.json", json_buffer, JSON_BUFFER_SIZE);
-    snprintf(response, HTML_BUFFER_SIZE,
-             "HTTP/1.1 200 OK\r\n"
-             "Content-Type: application/json\r\n"
-             "Content-Disposition: attachment; "
-             "filename=\"spi_report.json\"\r\n\r\n%s",
-             json_buffer);
-    mutex_exit(&buffer_mutex);
-
-    tcp_write(pcb, response, strlen(response), TCP_WRITE_FLAG_COPY);
-
-  } else if (strstr(request, "GET /api/publish")) {
-    // Publish via MQTT
-    // CHANGED: Use new API check
-    if (mqtt_is_connected()) { 
-      mutex_enter_blocking(&buffer_mutex);
-      sd_read_safe("latest.json", json_buffer, JSON_BUFFER_SIZE);
-      
-      // CHANGED: Use new API publish
-      mqtt_publish_report(json_buffer); 
-      
-      mutex_exit(&buffer_mutex);
-
-      snprintf(response, HTML_BUFFER_SIZE,
-               "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"
-               "{\"message\":\"Report published to MQTT\"}");
-    } else {
-      snprintf(response, HTML_BUFFER_SIZE,
-               "HTTP/1.1 503 OK\r\nContent-Type: application/json\r\n\r\n"
-               "{\"error\":\"MQTT not connected\"}");
-    }
-    tcp_write(pcb, response, strlen(response), TCP_WRITE_FLAG_COPY);
-
-  } else if (strstr(request, "GET /api/view?file=")) {
-    // View saved report
-    char *file_param = strstr(request, "file=");
-    if (file_param) {
-      file_param += 5;
-      char *space = strchr(file_param, ' ');
-      if (space)
-        *space = '\0';
-
-      mutex_enter_blocking(&buffer_mutex);
-      sd_read_safe(file_param, json_buffer, JSON_BUFFER_SIZE);
-      mutex_exit(&buffer_mutex);
-
-      snprintf(response, HTML_BUFFER_SIZE,
-               "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n%s",
-               json_buffer);
-      tcp_write(pcb, response, strlen(response), TCP_WRITE_FLAG_COPY);
-    }
-  }
-
-  tcp_output(pcb);
-  tcp_recved(pcb, p->tot_len);
-  pbuf_free(p);
-  free(request);
-  free(response);
-
-  unregister_connection(pcb);
-  tcp_close(pcb);
-
-  return ERR_OK;
-}
-
-static err_t http_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
-  if (err != ERR_OK || newpcb == NULL) {
-    return ERR_VAL;
-  }
-
-  int slot = register_connection(newpcb);
-  if (slot < 0) {
-    tcp_abort(newpcb);
-    return ERR_ABRT;
-  }
-
-  tcp_arg(newpcb, newpcb);
-  tcp_recv(newpcb, http_recv);
-  tcp_setprio(newpcb, TCP_PRIO_MIN);
-
-  return ERR_OK;
-}
-
-void http_server_init(void) {
-  printf("\n--- Starting HTTP Server ---\n");
-
-  memset(http_connections, 0, sizeof(http_connections));
-  mutex_init(&buffer_mutex);
-
-  http_server_pcb = tcp_new();
-  if (!http_server_pcb) {
-    printf("✗ Failed to create HTTP server\n");
-    return;
-  }
-
-  err_t err = tcp_bind(http_server_pcb, IP_ADDR_ANY, HTTP_PORT);
-  if (err != ERR_OK) {
-    printf("✗ Failed to bind port %d\n", HTTP_PORT);
-    return;
-  }
-
-  http_server_pcb = tcp_listen(http_server_pcb);
-  tcp_accept(http_server_pcb, http_accept);
-
-  printf("✓ HTTP server running on port %d\n", HTTP_PORT);
-  printf("🌐 Access at: http://%s\n", pico_ip_address);
 }
 
 // ========== CLI LOOP ==================
@@ -841,9 +486,6 @@ void print_main_menu(void) {
 void cli_core(void) {
   sleep_ms(2000);
   printf("\n[CLI] Starting SPI Flash Tool CLI on Core 1...\n");
-
-  // Initialize SPI for CLI uses
-  spi_master_init();
 
   while (true) {
     print_main_menu();
@@ -1140,14 +782,15 @@ int main(void) {
 
   printf("\n");
   printf("╔════════════════════════════════════════╗\n");
-  printf("║    SPI Flash Diagnostic Tool v2.1      ║\n");
-  printf("║        Web GUI + MQTT + SD             ║\n");
+  printf("║      SPI Flash Diagnostic Tool v3      ║\n");
+  printf("║                                        ║\n");
   printf("╚════════════════════════════════════════╝\n");
   printf("\n");
 
   // Initialize SPI
   printf("--- Initializing SPI ---\n");
   mutex_init(&spi_mutex);
+  mutex_init(&buffer_mutex);
   spi_master_init();
   spi_initialized = true;
   printf("✓ SPI initialized\n");
@@ -1178,12 +821,10 @@ int main(void) {
   const char *ip = ip4addr_ntoa(netif_ip_addr4(netif_default));
   strncpy(pico_ip_address, ip, sizeof(pico_ip_address) - 1);
   printf("✓ IP: %s\n", pico_ip_address);
-
+  //Start HTTP server
+  http_server_init(pico_ip_address);
   // Initialize MQTT - CHANGED: Call the function from mqtt_ops.c
   mqtt_init(); 
-
-  // Start HTTP server
-  http_server_init();
 
   printf("\n========== SYSTEM READY ==========\n");
   printf("✅ SPI: Ready\n");

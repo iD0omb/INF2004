@@ -1,4 +1,3 @@
-# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
 if(WIN32)
     set(USERHOME $ENV{USERPROFILE})
 else()
@@ -19,10 +18,13 @@ cmake_minimum_required(VERSION 3.13)
 # 1. Initialize SDK
 include(pico_sdk_import.cmake)
 
-# This name can be anything. It does not need to be "spi_comms".
+
 project(main C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
+
+include_directories(include)
+include_directories(lib/fatfs)
 
 pico_sdk_init()
 
@@ -31,18 +33,18 @@ pico_sdk_init()
 # ============================
 #  Main executable
 # ============================
-# The first word here becomes your output filename (spi_flash_webgui.uf2)
 add_executable(main
-    main.c 
-    spi_ops.c 
-    json.c    
-    flash_db.c
-    sd_card.c
-    mqtt.c
-    fatfs/ff.c
-    fatfs/diskio.c
-    fatfs/ffsystem.c
-    fatfs/ffunicode.c)
+    src/main.c 
+    src/spi_ops.c 
+    src/json.c    
+    src/flash_db.c
+    src/sd_card.c
+    src/web_server.c
+    src/mqtt.c
+    lib/fatfs/ff.c
+    lib/fatfs/diskio.c
+    lib/fatfs/ffsystem.c
+    lib/fatfs/ffunicode.c)
 
 # ============================
 #  Include directories
@@ -55,7 +57,7 @@ target_include_directories(main PRIVATE
 # ============================
 #  Libraries
 # ============================
-# This name MUST match the add_executable name above
+
 target_link_libraries(main
     pico_stdlib
     hardware_spi
