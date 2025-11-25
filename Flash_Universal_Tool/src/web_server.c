@@ -154,7 +154,7 @@ void generate_html_page(char *output, size_t size) {
       "    <div class='card'>\n"
       "      <h2>Saved Reports</h2>\n"
       "      <div class='btn-group'>\n"
-      "        <button class='btn' onclick='viewReport(\"latest.json\")'>View "
+      "        <button class='btn' onclick='viewReport(\"latest.jsn\")'>View "
       "Latest</button>\n"
       "      </div>\n"
       "      <div class='info'>Reports are automatically saved to SD "
@@ -259,7 +259,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
         
         // Save to SD card if successful
         if (success && sd_ready) {
-            sd_write_safe("latest.json", json_buffer);
+            sd_write_safe("latest.jsn", json_buffer);
         }
         
         snprintf(response, HTML_BUFFER_SIZE, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n%s", json_buffer);
@@ -274,7 +274,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
         bool file_read = false;
         if (sd_ready) {
             // Assuming sd_read_safe returns true on success
-            file_read = sd_read_safe("latest.json", json_buffer, JSON_BUFFER_SIZE);
+            file_read = sd_read_safe("latest.jsn", json_buffer, JSON_BUFFER_SIZE);
         }
 
         if (file_read) {
@@ -301,7 +301,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err
             
             bool file_read = false;
             if (sd_ready) {
-                file_read = sd_read_safe("latest.json", json_buffer, JSON_BUFFER_SIZE);
+                file_read = sd_read_safe("latest.jsn", json_buffer, JSON_BUFFER_SIZE);
             }
 
             if (file_read) {
